@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from .engine import ForecastExperiment
+from .features import make_supervised_features
+from .report import render_report
+from .synthetic import synthetic_market
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Leakage-aware financial forecasting project")
+    parser.add_argument("--rows", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--cost-bps", type=float, default=5.0)
+    parser.add_argument("--output", type=Path, default=Path("artifacts"))
+    args = parser.parse_args(argv)
+    close, volume = synthetic_market(args.rows, args.seed)
+    data = make_supervised_features(close, volume)
+    experiment = ForecastExperiment(seed=args.seed)
+    predictions = experiment.walk_forward(data)
+    result = experiment.evaluate(predictions, args.cost_bps)
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / "forecast_results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    render_report(result, args.output / "forecast_report.html")
+    print(json.dumps({"observations": result["observations"], "models": result["models"], "output": str(args.output)}, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
