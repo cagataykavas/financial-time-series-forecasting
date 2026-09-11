@@ -20,4 +20,6 @@ def synthetic_market(rows: int = 1100, seed: int = 42) -> tuple[pd.Series, pd.Se
         volume[i] *= 1.0 + min(2.0, abs(returns[i]) * 25)
     close = 100.0 * np.exp(np.cumsum(returns))
     index = pd.date_range("2021-01-04", periods=rows, freq="B")
-    return pd.Series(close, index=index, name="close"), pd.Series(volume, index=index, name="volume")
+    return pd.Series(close, index=index, name="close"), pd.Series(
+        volume, index=index, name="volume"
+    )
