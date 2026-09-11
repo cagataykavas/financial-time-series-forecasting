@@ -23,7 +23,7 @@ test = ["httpx>=0.28", "pytest>=8.0", "ruff>=0.12"]
 finforecast = "finforecast.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["finforecast*"]
+include = ["app*", "finforecast*"]
 
 [tool.ruff]
 line-length = 100
