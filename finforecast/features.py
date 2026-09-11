@@ -20,9 +20,8 @@ def make_supervised_features(close: pd.Series, volume: pd.Series | None = None) 
         volume_change = volume.pct_change()
         frame["volume_change_lag_1"] = volume_change.shift(1)
         frame["volume_z_20"] = (
-            (volume.shift(1) - volume.shift(1).rolling(20).mean())
-            / volume.shift(1).rolling(20).std()
-        )
+            volume.shift(1) - volume.shift(1).rolling(20).mean()
+        ) / volume.shift(1).rolling(20).std()
     frame["target_next_return"] = returns.shift(-1)
     return frame.replace([float("inf"), float("-inf")], pd.NA).dropna()
 

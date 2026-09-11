@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
-from .features import assert_no_target_leakage
+from .backtest import BacktestRunner
+from .models import default_model_factories
+from .splits import WalkForwardConfig, WalkForwardSplitter
 
 
 @dataclass(frozen=True)
@@ -29,44 +27,22 @@ class ForecastExperiment:
         self.test_size = test_size
         self.seed = seed
 
-    def _models(self) -> dict[str, Callable[[], object]]:
-        return {
-            "ridge": lambda: Pipeline([
-                ("scale", StandardScaler()),
-                ("model", Ridge(alpha=3.0)),
-            ]),
-            "gradient_boosting": lambda: HistGradientBoostingRegressor(
-                max_depth=3,
-                learning_rate=0.05,
-                max_iter=180,
-                l2_regularization=0.5,
-                random_state=self.seed,
-            ),
-        }
-
     def walk_forward(self, data: pd.DataFrame) -> pd.DataFrame:
-        assert_no_target_leakage(data)
-        features = [column for column in data.columns if column != "target_next_return"]
-        rows: list[pd.DataFrame] = []
-        for start in range(self.min_train, len(data), self.test_size):
-            train = data.iloc[:start]
-            test = data.iloc[start : start + self.test_size]
-            if test.empty:
-                break
-            fold = pd.DataFrame(index=test.index)
-            fold["actual"] = test["target_next_return"]
-            fold["naive_zero"] = 0.0
-            for name, factory in self._models().items():
-                model = factory()
-                model.fit(train[features], train["target_next_return"])
-                fold[name] = model.predict(test[features])
-            rows.append(fold)
-        if not rows:
-            raise ValueError("not enough observations for a walk-forward fold")
-        return pd.concat(rows).sort_index()
+        splitter = WalkForwardSplitter(
+            WalkForwardConfig(min_train_size=self.min_train, test_size=self.test_size)
+        )
+        factories = default_model_factories(self.seed)
+        selected = {
+            name: factory
+            for name, factory in factories.items()
+            if name in {"naive_zero", "ridge", "gradient_boosting"}
+        }
+        return BacktestRunner(splitter, selected).run(data).predictions.drop(columns="fold")
 
     @staticmethod
-    def _strategy_metrics(actual: pd.Series, prediction: pd.Series, cost_bps: float) -> dict[str, float]:
+    def _strategy_metrics(
+        actual: pd.Series, prediction: pd.Series, cost_bps: float
+    ) -> dict[str, float]:
         position = np.sign(prediction).astype(float)
         turnover = position.diff().abs().fillna(position.abs())
         gross = position * actual
@@ -133,7 +109,10 @@ class ForecastExperiment:
             "models": model_metrics,
             "gradient_boosting_vs_naive_mae_bootstrap": comparison,
             "predictions": [
-                {"timestamp": str(index), **{column: float(value) for column, value in row.items()}}
+                {
+                    "timestamp": str(index),
+                    **{column: float(value) for column, value in row.items()},
+                }
                 for index, row in predictions.iterrows()
             ],
         }

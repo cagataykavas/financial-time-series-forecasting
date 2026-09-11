@@ -27,10 +27,14 @@ def walk_forward(data: pd.DataFrame, min_train: int = 250, test_size: int = 20):
         test = data.iloc[start : start + test_size]
         if test.empty:
             break
-        model = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=150, random_state=42)
+        model = HistGradientBoostingRegressor(
+            max_depth=3, learning_rate=0.05, max_iter=150, random_state=42
+        )
         model.fit(train[features], train["target_next_return"])
         pred = model.predict(test[features])
-        fold = pd.DataFrame({"actual": test["target_next_return"], "prediction": pred}, index=test.index)
+        fold = pd.DataFrame(
+            {"actual": test["target_next_return"], "prediction": pred}, index=test.index
+        )
         predictions.append(fold)
     return pd.concat(predictions)
 
@@ -53,7 +57,10 @@ if __name__ == "__main__":
     returns = np.zeros(n)
     for i in range(1, n):
         returns[i] = 0.08 * returns[i - 1] + noise[i]
-    close = pd.Series(100 * np.exp(np.cumsum(returns)), index=pd.date_range("2021-01-01", periods=n, freq="B"))
+    close = pd.Series(
+        100 * np.exp(np.cumsum(returns)),
+        index=pd.date_range("2021-01-01", periods=n, freq="B"),
+    )
     dataset = make_features(close)
     prediction_frame = walk_forward(dataset)
     print(metrics(prediction_frame))

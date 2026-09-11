@@ -11,10 +11,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
+          cache: pip
+      - run: pip install -e '.[test]' build
       - run: ruff check .
+      - run: ruff format --check .
       - run: pytest -q
-      - run: python -m finforecast.cli --rows 650 --seed 42
+      - name: Build deterministic forecasting evidence twice
+        run: |
+          python -m finforecast.cli --evidence --rows 650 --seed 42 --output artifacts/run-a
+          python -m finforecast.cli --evidence --rows 650 --seed 42 --output artifacts/run-b
+          diff -r artifacts/run-a artifacts/run-b
+      - name: Verify clean wheel installation
+        run: |
+          python -m build --wheel
+          python -m venv /tmp/finforecast-wheel
+          /tmp/finforecast-wheel/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/finforecast-wheel/bin/finforecast --evidence --rows 520 --seed 7 --output wheel-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probabilistic-forecasting-evidence
+          path: artifacts/run-a
   container:
     runs-on: ubuntu-latest
     steps:
@@ -23,5 +40,16 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          load: true
           push: false
           tags: financial-time-series-forecasting:ci
+      - name: Verify non-root container and health endpoint
+        run: |
+          test "$(docker run --rm financial-time-series-forecasting:ci id -u)" != "0"
+          docker run -d --name forecast-api -p 8000:8000 financial-time-series-forecasting:ci
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8000/health; then exit 0; fi
+            sleep 1
+          done
+          docker logs forecast-api
+          exit 1
