@@ -3,9 +3,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -13,6 +21,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -e '.[test]' build
+      - run: pip check
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q
@@ -34,6 +43,7 @@ jobs:
           path: artifacts/run-a
   container:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

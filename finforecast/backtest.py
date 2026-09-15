@@ -33,12 +33,17 @@ class BacktestRunner:
     ) -> None:
         if not model_factories:
             raise ValueError("at least one model factory is required")
+        reserved = {"actual", "fold"}.intersection(model_factories)
+        if reserved:
+            raise ValueError(f"model names are reserved output columns: {sorted(reserved)}")
+        if not target_column:
+            raise ValueError("target_column cannot be empty")
         self.splitter = splitter
         self.model_factories = model_factories
         self.target_column = target_column
 
     def run(self, data: pd.DataFrame) -> BacktestResult:
-        assert_no_target_leakage(data)
+        assert_no_target_leakage(data, self.target_column)
         if not data.index.is_monotonic_increasing or not data.index.is_unique:
             raise ValueError("observations must have a unique, increasing time index")
         feature_columns = [column for column in data.columns if column != self.target_column]

@@ -32,3 +32,5 @@ def test_unfitted_or_undersized_baselines_fail_closed():
         HistoricalMeanRegressor().predict([[1.0]])
     with pytest.raises(ValueError, match="season_length"):
         SeasonalNaiveRegressor(4).fit([[1.0]], [1.0])
+    with pytest.raises(ValueError, match="finite"):
+        HistoricalMeanRegressor().fit([[1.0]], [float("nan")])

@@ -24,3 +24,11 @@ def test_unfitted_calibrator_refuses_prediction():
 def test_calibrator_rejects_bad_shapes():
     with pytest.raises(ValueError, match="at least two"):
         SplitConformalCalibrator().fit([1.0], [1.0])
+
+
+def test_calibrator_rejects_invalid_point_forecasts():
+    calibrator = SplitConformalCalibrator().fit([0.0, 1.0], [0.0, 0.0])
+    with pytest.raises(ValueError, match="finite"):
+        calibrator.predict([float("nan")])
+    with pytest.raises(ValueError, match="vector"):
+        calibrator.predict([[1.0]])

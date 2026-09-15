@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from .engine import ForecastExperiment
@@ -11,11 +12,25 @@ from .report import render_report
 from .synthetic import synthetic_market
 
 
+def _rows(value: str) -> int:
+    parsed = int(value)
+    if parsed < 320:
+        raise argparse.ArgumentTypeError("rows must be at least 320")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("value must be finite and non-negative")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Leakage-aware financial forecasting project")
-    parser.add_argument("--rows", type=int, default=1000)
+    parser.add_argument("--rows", type=_rows, default=1000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--cost-bps", type=float, default=5.0)
+    parser.add_argument("--cost-bps", type=_non_negative_float, default=5.0)
     parser.add_argument("--output", type=Path, default=Path("artifacts"))
     parser.add_argument(
         "--evidence", action="store_true", help="build governed evaluation evidence"

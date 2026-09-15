@@ -37,6 +37,8 @@ class SplitConformalCalibrator:
         if self.radius_ is None:
             raise RuntimeError("calibrator must be fitted before prediction")
         point = np.asarray(point_forecast, dtype=float)
+        if point.ndim != 1 or point.size == 0 or not np.isfinite(point).all():
+            raise ValueError("point forecasts must be a finite, non-empty vector")
         return point - self.radius_, point + self.radius_
 
     def metadata(self) -> dict[str, float | int]:

@@ -5,6 +5,10 @@ import pandas as pd
 
 
 def synthetic_market(rows: int = 1100, seed: int = 42) -> tuple[pd.Series, pd.Series]:
+    if isinstance(rows, bool) or not isinstance(rows, int):
+        raise TypeError("rows must be an integer")
+    if rows < 2:
+        raise ValueError("rows must be at least 2")
     rng = np.random.default_rng(seed)
     returns = np.zeros(rows)
     volume = rng.lognormal(14.8, 0.30, rows)

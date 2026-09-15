@@ -29,8 +29,8 @@ class HistoricalMeanRegressor:
 
     def fit(self, features: object, target: object) -> HistoricalMeanRegressor:
         values = np.asarray(target, dtype=float)
-        if values.size == 0:
-            raise ValueError("cannot fit a baseline without target history")
+        if values.ndim != 1 or values.size == 0 or not np.isfinite(values).all():
+            raise ValueError("target history must be a finite, non-empty vector")
         self.mean_ = float(values.mean())
         return self
 
@@ -47,6 +47,8 @@ class SeasonalNaiveRegressor:
 
     def fit(self, features: object, target: object) -> SeasonalNaiveRegressor:
         values = np.asarray(target, dtype=float)
+        if values.ndim != 1 or not np.isfinite(values).all():
+            raise ValueError("target history must be a finite vector")
         if self.season_length < 1 or values.size < self.season_length:
             raise ValueError("season_length must fit inside target history")
         self.tail_ = values[-self.season_length :].copy()

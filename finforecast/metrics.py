@@ -40,6 +40,8 @@ def smape(actual: object, predicted: object) -> float:
 def mase(actual: object, predicted: object, training_target: object, seasonality: int = 1) -> float:
     left, right = _paired(actual, predicted)
     history = np.asarray(training_target, dtype=float)
+    if history.ndim != 1 or not np.isfinite(history).all():
+        raise ValueError("training history must be a finite one-dimensional array")
     if seasonality < 1 or history.size <= seasonality:
         raise ValueError("training history must exceed seasonality")
     scale = float(np.mean(np.abs(history[seasonality:] - history[:-seasonality])))
@@ -89,7 +91,7 @@ class BusinessCost:
             error * self.underforecast_weight,
             -error * self.overforecast_weight,
         )
-        actions = np.abs(right) >= self.action_threshold
+        actions = np.abs(right) > self.action_threshold
         costs = weighted + actions.astype(float) * self.action_cost
         return {
             "mean_business_cost": float(costs.mean()),

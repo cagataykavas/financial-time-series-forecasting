@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,22 +31,51 @@ class PromotionPolicy:
         aggregate: dict[str, dict[str, float]],
         folds: tuple[dict[str, object], ...],
     ) -> PromotionDecision:
+        if candidate == baseline:
+            raise ValueError("candidate and baseline must be different models")
+        missing = {candidate, baseline}.difference(aggregate)
+        if missing:
+            raise ValueError(f"aggregate metrics are missing models: {sorted(missing)}")
+        if not folds:
+            raise ValueError("at least one fold is required for a promotion decision")
         candidate_metrics = aggregate[candidate]
         baseline_metrics = aggregate[baseline]
+        candidate_mae = candidate_metrics["mae"]
         baseline_mae = baseline_metrics["mae"]
-        relative_improvement = (
-            (baseline_mae - candidate_metrics["mae"]) / baseline_mae if baseline_mae else 0.0
-        )
+        if not all(math.isfinite(value) and value >= 0 for value in (candidate_mae, baseline_mae)):
+            raise ValueError("aggregate MAE values must be finite and non-negative")
+        if baseline_mae == 0:
+            relative_improvement = 0.0 if candidate_mae == 0 else -1.0
+        else:
+            relative_improvement = (baseline_mae - candidate_mae) / baseline_mae
         wins = 0
         for fold in folds:
-            models = fold["models"]
-            assert isinstance(models, dict)
-            if models[candidate]["mae"] < models[baseline]["mae"]:  # type: ignore[index]
+            models = fold.get("models")
+            if not isinstance(models, dict) or candidate not in models or baseline not in models:
+                raise ValueError("each fold must contain candidate and baseline metrics")
+            candidate_fold = models[candidate]
+            baseline_fold = models[baseline]
+            if not isinstance(candidate_fold, dict) or not isinstance(baseline_fold, dict):
+                raise ValueError("fold model metrics must be mappings")
+            fold_maes = (candidate_fold.get("mae"), baseline_fold.get("mae"))
+            if not all(
+                isinstance(value, int | float) and math.isfinite(value) and value >= 0
+                for value in fold_maes
+            ):
+                raise ValueError("fold MAE values must be finite and non-negative")
+            if candidate_fold["mae"] < baseline_fold["mae"]:
                 wins += 1
-        fold_win_rate = wins / len(folds) if folds else 0.0
+        fold_win_rate = wins / len(folds)
         candidate_cost = candidate_metrics.get("mean_business_cost", candidate_metrics["mae"])
         baseline_cost = baseline_metrics.get("mean_business_cost", baseline_metrics["mae"])
-        cost_ratio = candidate_cost / baseline_cost if baseline_cost else float("inf")
+        if not all(
+            math.isfinite(value) and value >= 0 for value in (candidate_cost, baseline_cost)
+        ):
+            raise ValueError("business-cost values must be finite and non-negative")
+        if baseline_cost == 0:
+            cost_ratio = 1.0 if candidate_cost == 0 else float.fromhex("0x1.fffffffffffffp+1023")
+        else:
+            cost_ratio = candidate_cost / baseline_cost
         reasons: list[str] = []
         if relative_improvement < self.min_relative_mae_improvement:
             reasons.append("relative_mae_improvement_below_threshold")

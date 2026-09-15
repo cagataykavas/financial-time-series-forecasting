@@ -43,3 +43,16 @@ def test_business_cost_can_value_underforecast_more_than_overforecast():
     under = cost.evaluate([2.0], [1.0])
     over = cost.evaluate([1.0], [2.0])
     assert under["mean_business_cost"] == 3 * over["mean_business_cost"]
+
+
+def test_zero_forecast_is_not_counted_as_an_action():
+    result = BusinessCost(action_threshold=0.0, action_cost=1.0).evaluate([0.0], [0.0])
+    assert result["action_rate"] == 0.0
+    assert result["mean_business_cost"] == 0.0
+
+
+def test_mase_rejects_non_finite_or_non_vector_training_history():
+    with pytest.raises(ValueError, match="finite"):
+        mase([1.0], [1.0], [0.0, float("nan")])
+    with pytest.raises(ValueError, match="one-dimensional"):
+        mase([1.0], [1.0], [[0.0], [1.0]])

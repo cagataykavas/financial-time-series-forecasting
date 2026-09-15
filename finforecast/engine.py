@@ -1,28 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from .backtest import BacktestRunner
+from .metrics import mae, rmse
 from .models import default_model_factories
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 
-@dataclass(frozen=True)
-class FoldPrediction:
-    timestamp: str
-    actual: float
-    naive_zero: float
-    ridge: float
-    gradient_boosting: float
-
-
 class ForecastExperiment:
     def __init__(self, min_train: int = 250, test_size: int = 20, seed: int = 42) -> None:
+        WalkForwardConfig(min_train_size=min_train, test_size=test_size)
         self.min_train = min_train
         self.test_size = test_size
         self.seed = seed
@@ -43,6 +34,8 @@ class ForecastExperiment:
     def _strategy_metrics(
         actual: pd.Series, prediction: pd.Series, cost_bps: float
     ) -> dict[str, float]:
+        if not np.isfinite(cost_bps) or cost_bps < 0:
+            raise ValueError("cost_bps must be finite and non-negative")
         position = np.sign(prediction).astype(float)
         turnover = position.diff().abs().fillna(position.abs())
         gross = position * actual
@@ -73,8 +66,18 @@ class ForecastExperiment:
         This is not a Diebold-Mariano test and is labelled accordingly. It is a simple
         resampling diagnostic for this public reference project.
         """
+        if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
+            raise ValueError("samples must be a positive integer")
         loss_a = np.abs(actual.to_numpy() - prediction_a.to_numpy())
         loss_b = np.abs(actual.to_numpy() - prediction_b.to_numpy())
+        if (
+            loss_a.ndim != 1
+            or loss_a.shape != loss_b.shape
+            or loss_a.size == 0
+            or not np.isfinite(loss_a).all()
+            or not np.isfinite(loss_b).all()
+        ):
+            raise ValueError("bootstrap inputs must be finite, non-empty paired vectors")
         diff = loss_a - loss_b
         rng = np.random.default_rng(seed)
         means = np.empty(samples)
@@ -87,13 +90,33 @@ class ForecastExperiment:
         }
 
     def evaluate(self, predictions: pd.DataFrame, cost_bps: float = 5.0) -> dict[str, Any]:
+        required = {"actual", "naive_zero", "gradient_boosting"}
+        missing = required.difference(predictions.columns)
+        if missing:
+            raise ValueError(f"prediction columns are missing: {sorted(missing)}")
+        if predictions.empty:
+            raise ValueError("predictions cannot be empty")
+        if not predictions.index.is_unique or not predictions.index.is_monotonic_increasing:
+            raise ValueError("predictions must have a unique, increasing time index")
+        try:
+            numeric = predictions.to_numpy(dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("predictions must be numeric") from exc
+        if not np.isfinite(numeric).all():
+            raise ValueError("predictions must be finite")
+        if not np.isfinite(cost_bps) or cost_bps < 0:
+            raise ValueError("cost_bps must be finite and non-negative")
+
         actual = predictions["actual"]
         model_metrics: dict[str, dict[str, float]] = {}
-        for name in [column for column in predictions.columns if column != "actual"]:
+        model_columns = [
+            column for column in predictions.columns if column not in {"actual", "fold"}
+        ]
+        for name in model_columns:
             pred = predictions[name]
             model_metrics[name] = {
-                "mae": float(mean_absolute_error(actual, pred)),
-                "rmse": float(mean_squared_error(actual, pred) ** 0.5),
+                "mae": mae(actual, pred),
+                "rmse": rmse(actual, pred),
                 "directional_accuracy": float((np.sign(actual) == np.sign(pred)).mean()),
                 **self._strategy_metrics(actual, pred, cost_bps),
             }

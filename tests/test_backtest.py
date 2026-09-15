@@ -56,3 +56,27 @@ def test_overlapping_test_windows_are_rejected():
     )
     with pytest.raises(ValueError, match="overlapping"):
         runner.run(dataset())
+
+
+def test_custom_target_column_is_supported():
+    frame = dataset().rename(columns={"target_next_return": "label"})
+    runner = BacktestRunner(
+        WalkForwardSplitter(WalkForwardConfig(min_train_size=15, test_size=5)),
+        {"zero": ZeroReturnRegressor},
+        target_column="label",
+    )
+    assert len(runner.run(frame).predictions) == 25
+
+
+def test_backtest_rejects_bad_data_before_model_fit():
+    runner = BacktestRunner(
+        WalkForwardSplitter(WalkForwardConfig(min_train_size=15, test_size=5)),
+        {"zero": ZeroReturnRegressor},
+    )
+    with pytest.raises(ValueError, match="finite"):
+        runner.run(dataset().assign(feature=float("nan")))
+    with pytest.raises(ValueError, match="reserved"):
+        BacktestRunner(
+            WalkForwardSplitter(WalkForwardConfig(min_train_size=15, test_size=5)),
+            {"actual": ZeroReturnRegressor},
+        )

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from finforecast.domain import ModelStatus
 from finforecast.registry import PromotionPolicy, write_model_manifest
 
@@ -53,3 +55,22 @@ def test_manifest_hash_is_stable_and_payload_sensitive(tmp_path):
     assert first["sha256"] == second["sha256"]
     assert changed["sha256"] != first["sha256"]
     assert json.loads((tmp_path / "a.json").read_text())["schema_version"] == 1
+
+
+def test_promotion_handles_zero_baseline_without_non_finite_metrics():
+    aggregate = {
+        "candidate": {"mae": 1.0, "mean_business_cost": 1.0},
+        "baseline": {"mae": 0.0, "mean_business_cost": 0.0},
+    }
+    decision = PromotionPolicy().decide("candidate", "baseline", aggregate, folds(1.0, 0.0))
+    assert not decision.promoted
+    assert decision.metrics["relative_mae_improvement"] == -1.0
+
+
+def test_promotion_rejects_missing_fold_evidence():
+    aggregate = {
+        "candidate": {"mae": 0.8},
+        "baseline": {"mae": 1.0},
+    }
+    with pytest.raises(ValueError, match="at least one fold"):
+        PromotionPolicy().decide("candidate", "baseline", aggregate, ())

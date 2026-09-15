@@ -24,7 +24,7 @@ def default_model_factories(seed: int = 42) -> dict[str, Callable[[], Regressor]
         "gradient_boosting": lambda: HistGradientBoostingRegressor(
             max_depth=3,
             learning_rate=0.05,
-            max_iter=180,
+            max_iter=100,
             l2_regularization=0.5,
             random_state=seed,
         ),
