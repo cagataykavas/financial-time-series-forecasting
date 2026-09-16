@@ -59,31 +59,63 @@ class ForecastExperiment:
         prediction_b: pd.Series,
         *,
         samples: int = 3000,
+        block_size: int | None = None,
         seed: int = 42,
-    ) -> dict[str, float]:
-        """Bootstrap MAE(A)-MAE(B); negative values favor model A.
+    ) -> dict[str, float | int | str]:
+        """Circular moving-block bootstrap of MAE(A)-MAE(B).
 
-        This is not a Diebold-Mariano test and is labelled accordingly. It is a simple
-        resampling diagnostic for this public reference project.
+        Negative values favor model A. Consecutive loss differences are sampled in
+        blocks so short-range serial dependence is not erased as it is by IID resampling.
+        This remains a bootstrap diagnostic, not a Diebold-Mariano test.
         """
         if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
             raise ValueError("samples must be a positive integer")
-        loss_a = np.abs(actual.to_numpy() - prediction_a.to_numpy())
-        loss_b = np.abs(actual.to_numpy() - prediction_b.to_numpy())
+        actual_values = actual.to_numpy(dtype=float)
+        prediction_a_values = prediction_a.to_numpy(dtype=float)
+        prediction_b_values = prediction_b.to_numpy(dtype=float)
         if (
-            loss_a.ndim != 1
-            or loss_a.shape != loss_b.shape
-            or loss_a.size == 0
-            or not np.isfinite(loss_a).all()
-            or not np.isfinite(loss_b).all()
+            actual_values.ndim != 1
+            or actual_values.size == 0
+            or actual_values.shape != prediction_a_values.shape
+            or actual_values.shape != prediction_b_values.shape
+            or not actual.index.equals(prediction_a.index)
+            or not actual.index.equals(prediction_b.index)
+            or not np.isfinite(actual_values).all()
+            or not np.isfinite(prediction_a_values).all()
+            or not np.isfinite(prediction_b_values).all()
         ):
             raise ValueError("bootstrap inputs must be finite, non-empty paired vectors")
+        loss_a = np.abs(actual_values - prediction_a_values)
+        loss_b = np.abs(actual_values - prediction_b_values)
         diff = loss_a - loss_b
+        if block_size is None:
+            resolved_block_size = min(len(diff), max(1, int(np.ceil(len(diff) ** (1 / 3)))))
+        else:
+            if (
+                isinstance(block_size, bool)
+                or not isinstance(block_size, int)
+                or not 1 <= block_size <= len(diff)
+            ):
+                raise ValueError("block_size must be an integer between one and sample length")
+            resolved_block_size = block_size
+
         rng = np.random.default_rng(seed)
+        block_count = int(np.ceil(len(diff) / resolved_block_size))
+        offsets = np.arange(resolved_block_size)
         means = np.empty(samples)
-        for i in range(samples):
-            means[i] = rng.choice(diff, size=len(diff), replace=True).mean()
+        # Bound temporary arrays so large external data sets do not turn the
+        # diagnostic into an avoidable multi-gigabyte allocation.
+        batch_size = max(1, min(samples, 1_000_000 // len(diff)))
+        for start in range(0, samples, batch_size):
+            stop = min(start + batch_size, samples)
+            starts = rng.integers(0, len(diff), size=(stop - start, block_count))
+            indices = (starts[:, :, None] + offsets) % len(diff)
+            sampled = diff[indices.reshape(stop - start, -1)[:, : len(diff)]]
+            means[start:stop] = sampled.mean(axis=1)
         return {
+            "method": "circular_moving_block_bootstrap",
+            "samples": samples,
+            "block_size": resolved_block_size,
             "observed_mae_difference": float(diff.mean()),
             "bootstrap_p05": float(np.quantile(means, 0.05)),
             "bootstrap_p95": float(np.quantile(means, 0.95)),

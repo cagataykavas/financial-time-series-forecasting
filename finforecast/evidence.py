@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from .backtest import BacktestRunner
+from .data import MarketData
 from .features import make_supervised_features
 from .intervals import SplitConformalCalibrator
 from .metrics import BusinessCost, interval_metrics, pinball_loss
@@ -14,8 +17,12 @@ from .splits import WalkForwardConfig, WalkForwardSplitter
 from .synthetic import synthetic_market
 
 
-def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
-    close, volume = synthetic_market(rows, seed)
+def _build_evidence(
+    close: pd.Series,
+    volume: pd.Series | None,
+    dataset_metadata: dict[str, Any],
+    seed: int,
+) -> dict[str, Any]:
     supervised = make_supervised_features(close, volume)
     splitter = WalkForwardSplitter(WalkForwardConfig(min_train_size=250, test_size=25, gap=1))
     runner = BacktestRunner(splitter, default_model_factories(seed))
@@ -49,14 +56,15 @@ def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
         min_fold_win_rate=0.5,
     )
     decision = policy.decide("gradient_boosting", "naive_zero", aggregate, backtest.folds)
+    dataset = {**dataset_metadata, "supervised_observations": len(supervised)}
+    scope_claim = (
+        "Synthetic results are engineering evidence, not evidence of market profitability."
+        if dataset["kind"] == "deterministic_synthetic_regime_shift"
+        else "Historical evaluation is not evidence of future market profitability."
+    )
     return {
         "schema_version": 1,
-        "dataset": {
-            "kind": "deterministic_synthetic_regime_shift",
-            "seed": seed,
-            "raw_observations": rows,
-            "supervised_observations": len(supervised),
-        },
+        "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
             "gap": 1,
@@ -68,18 +76,46 @@ def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
         "uncertainty": uncertainty,
         "promotion_decision": decision.as_dict(),
         "claims": [
-            "All reported forecasts are out of sample within the synthetic experiment.",
+            "All reported forecasts are out of sample within the evaluation.",
             (
                 "The conformal interval is calibrated on an earlier prediction segment "
                 "and evaluated later."
             ),
-            "Synthetic results are engineering evidence, not evidence of market profitability.",
+            scope_claim,
         ],
     }
 
 
-def write_evidence(output: str | Path, rows: int = 900, seed: int = 42) -> dict[str, Any]:
-    payload = build_evidence(rows, seed)
+def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
+    close, volume = synthetic_market(rows, seed)
+    return _build_evidence(
+        close,
+        volume,
+        {
+            "kind": "deterministic_synthetic_regime_shift",
+            "seed": seed,
+            "raw_observations": rows,
+        },
+        seed,
+    )
+
+
+def build_market_evidence(market: MarketData, seed: int = 42) -> dict[str, Any]:
+    return _build_evidence(market.close, market.volume, market.metadata(), seed)
+
+
+def write_evidence(
+    output: str | Path,
+    rows: int = 900,
+    seed: int = 42,
+    *,
+    market_data: MarketData | None = None,
+) -> dict[str, Any]:
+    payload = (
+        build_market_evidence(market_data, seed)
+        if market_data is not None
+        else build_evidence(rows, seed)
+    )
     destination = Path(output)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "forecast_evidence.json").write_text(

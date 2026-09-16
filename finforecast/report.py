@@ -54,8 +54,9 @@ def render_report(result: dict[str, Any], output: str | Path) -> Path:
     <p>Bootstrap 90% interval:
       [{bootstrap["bootstrap_p05"]:.6f}, {bootstrap["bootstrap_p95"]:.6f}]
     </p>
-    <p class="muted">Negative values favor gradient boosting. This is a paired bootstrap
-      diagnostic, not a Diebold–Mariano test.</p>
+    <p class="muted">Negative values favor gradient boosting. This is a circular
+      moving-block bootstrap diagnostic (block size {bootstrap["block_size"]}), not a
+      Diebold–Mariano test.</p>
   </div>
 </main></body>
 </html>

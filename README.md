@@ -1,6 +1,6 @@
 # Financial Time-Series Forecasting Platform
 
-A correctness-first reference platform for **time-ordered model evaluation, probabilistic uncertainty and governed model promotion**. It uses a deterministic synthetic market with changing volatility and autocorrelation so the repository can prove its mechanics without implying that a synthetic Sharpe ratio is an investable result.
+A correctness-first reference platform for **time-ordered model evaluation, probabilistic uncertainty and governed model promotion**. It includes a deterministic synthetic market for reproducible verification and a validated CSV boundary for evaluating external observations without weakening the temporal contract.
 
 This is no longer a notebook-shaped “train an LSTM and plot the test set” project. The package makes temporal boundaries, baselines, uncertainty calibration, business costs and release decisions explicit and testable.
 
@@ -8,11 +8,13 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 
 | Concern | Implementation | Failure guarded |
 |---|---|---|
+| Data ingestion | Ordered CSV validation and normalized SHA-256 identity | Silent sorting, duplicate timestamps and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
 | Label overlap | Configurable purge gap | Train/test boundary contamination |
 | Baselines | Zero return, historical mean, seasonal naive | Beating no meaningful comparator |
 | Candidates | Standardized ridge and histogram gradient boosting | Preprocessing fit outside each fold |
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
+| Model comparison | Circular moving-block bootstrap of paired loss differences | IID resampling that erases short-range dependence |
 | Decision economics | Asymmetric under/over-forecast cost and action cost | Statistically better but operationally worse model |
 | Uncertainty | Split conformal absolute-residual intervals | Uncalibrated confidence claims |
 | Governance | MAE improvement, fold-win and cost gates | Automatic promotion from one aggregate score |
@@ -48,6 +50,7 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
+├── data.py         # validated CSV loading and normalized data identity
 ├── domain.py       # fold, interval and promotion domain records
 ├── evidence.py     # reproducible end-to-end verification artifact
 ├── features.py     # shifted/rolling point-in-time features
@@ -76,6 +79,17 @@ The command writes:
 
 CI produces the evidence twice and requires a byte-for-byte match. It then builds a wheel, installs it in a clean environment and produces evidence outside the checkout. The artifact uploaded by CI is computed, not hand-written.
 
+## Evaluate an external CSV
+
+The default schema is `timestamp,close,volume`. Timestamps must already be unique and increasing; close values must be finite and positive; volume must be finite and non-negative. The loader normalizes timestamps to UTC and records a semantic SHA-256 fingerprint in every result and evidence manifest.
+
+```bash
+finforecast --csv prices.csv --output artifacts/market
+finforecast --csv prices.csv --evidence --output artifacts/market-evidence
+```
+
+Column names are configurable with `--timestamp-column`, `--close-column` and `--volume-column`. Use `--no-volume` for a close-only file. The CLI requires at least 320 raw observations so the 60-period features, minimum training window and out-of-sample evaluation all remain non-empty.
+
 ## Promotion policy
 
 A candidate becomes champion only if every configured gate passes:
@@ -86,11 +100,13 @@ A candidate becomes champion only if every configured gate passes:
 
 A rejection is a valid output and includes machine-readable reasons such as `insufficient_fold_win_rate` or `business_cost_regression`. The demo does not force a flattering result.
 
+The compatibility report compares gradient boosting with the zero-return baseline using a circular moving-block bootstrap. Blocks preserve local ordering in paired loss differences; the report records the method, block size and resample count. It is explicitly a bootstrap diagnostic, not a Diebold–Mariano test.
+
 ## Probabilistic forecast boundary
 
 The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample prediction segment**. Coverage and interval width are then measured on the later segment. The implementation uses the finite-sample conformal rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
 
-This establishes an honest uncertainty contract for the synthetic experiment. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
+This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
 
 ## API and container
 
@@ -119,6 +135,6 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 
 ## Claims and non-claims
 
-This repository demonstrates evaluation and release engineering. It does **not** claim alpha, profitability or readiness for live capital. A real-market extension still needs point-in-time vendor data, corporate-action and delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning, horizon-specific label purging and live coverage monitoring.
+This repository demonstrates evaluation and release engineering. It does **not** claim alpha, profitability or readiness for live capital. The CSV boundary validates structure, not economic correctness: production data still needs point-in-time vendor guarantees, corporate-action and delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning, horizon-specific label purging and live coverage monitoring.
 
 Those are explicit boundaries because a credible financial ML project should make invalid conclusions difficult—not merely make charts attractive.

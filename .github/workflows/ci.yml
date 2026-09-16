@@ -24,7 +24,7 @@ jobs:
       - run: pip check
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest -q
+      - run: pytest -q -W error
       - name: Build deterministic forecasting evidence twice
         run: |
           python -m finforecast.cli --evidence --rows 650 --seed 42 --output artifacts/run-a

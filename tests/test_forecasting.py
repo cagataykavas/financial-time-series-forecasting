@@ -38,6 +38,9 @@ def test_evaluation_includes_baselines_costs_and_bootstrap():
     assert "naive_zero" in result["models"]
     assert "gradient_boosting" in result["models"]
     assert "gradient_boosting_vs_naive_mae_bootstrap" in result
+    bootstrap = result["gradient_boosting_vs_naive_mae_bootstrap"]
+    assert bootstrap["method"] == "circular_moving_block_bootstrap"
+    assert bootstrap["block_size"] > 0
     assert result["models"]["gradient_boosting"]["average_turnover"] >= 0
 
 
@@ -84,3 +87,32 @@ def test_evaluation_ignores_backtest_fold_metadata():
         index=pd.date_range("2024-01-01", periods=2),
     )
     assert "fold" not in experiment.evaluate(predictions)["models"]
+
+
+def test_block_bootstrap_is_deterministic_and_validates_block_size():
+    actual = pd.Series([0.0, 1.0, -1.0, 2.0, -2.0, 1.0])
+    prediction_a = pd.Series([0.1, 0.8, -0.7, 1.7, -1.8, 0.8])
+    prediction_b = pd.Series([0.0, 0.4, -0.2, 1.0, -1.0, 0.2])
+
+    first = ForecastExperiment.paired_bootstrap_mae_difference(
+        actual, prediction_a, prediction_b, samples=200, block_size=3, seed=9
+    )
+    second = ForecastExperiment.paired_bootstrap_mae_difference(
+        actual, prediction_a, prediction_b, samples=200, block_size=3, seed=9
+    )
+    assert first == second
+    assert first["samples"] == 200
+    assert first["block_size"] == 3
+    assert first["observed_mae_difference"] < 0
+
+    with pytest.raises(ValueError, match="block_size"):
+        ForecastExperiment.paired_bootstrap_mae_difference(
+            actual, prediction_a, prediction_b, block_size=7
+        )
+
+    with pytest.raises(ValueError, match="paired vectors"):
+        ForecastExperiment.paired_bootstrap_mae_difference(
+            actual,
+            prediction_a.set_axis(pd.RangeIndex(10, 16)),
+            prediction_b,
+        )
