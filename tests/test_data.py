@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from finforecast.data import load_market_csv
+from finforecast.data import load_market_csv, market_data_from_frame
 
 
 def write_csv(tmp_path, rows: list[dict[str, object]], name: str = "market.csv"):
@@ -83,3 +83,15 @@ def test_load_market_csv_rejects_missing_columns_and_paths(tmp_path):
         load_market_csv(path)
     with pytest.raises(ValueError, match="does not exist"):
         load_market_csv(tmp_path / "missing.csv")
+
+
+def test_frame_and_csv_ingestion_have_identical_semantic_identity(tmp_path):
+    frame = pd.DataFrame(observations())
+    path = tmp_path / "market.csv"
+    frame.to_csv(path, index=False)
+
+    from_csv = load_market_csv(path)
+    from_frame = market_data_from_frame(frame, source_name="market.csv")
+
+    assert from_frame.sha256 == from_csv.sha256
+    assert from_frame.metadata() == from_csv.metadata()
