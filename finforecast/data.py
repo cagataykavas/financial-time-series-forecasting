@@ -77,6 +77,37 @@ def load_market_csv(
     if frame.empty:
         raise ValueError("market CSV cannot be empty")
 
+    return market_data_from_frame(
+        frame,
+        source_name=source.name,
+        timestamp_column=timestamp_column,
+        close_column=close_column,
+        volume_column=volume_column,
+    )
+
+
+def market_data_from_frame(
+    frame: pd.DataFrame,
+    *,
+    source_name: str,
+    timestamp_column: str = "timestamp",
+    close_column: str = "close",
+    volume_column: str | None = "volume",
+) -> MarketData:
+    """Validate in-memory observations using the same contract as CSV ingestion."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        raise ValueError("market observations cannot be empty")
+    selected = [timestamp_column, close_column]
+    if volume_column is not None:
+        selected.append(volume_column)
+    if any(not column for column in selected) or len(set(selected)) != len(selected):
+        raise ValueError("timestamp, close and volume column names must be non-empty and distinct")
+    missing = set(selected).difference(frame.columns)
+    if missing:
+        raise ValueError(f"market observations are missing columns: {sorted(missing)}")
+    if not source_name.strip():
+        raise ValueError("source_name must be non-empty")
+
     timestamps = pd.to_datetime(frame[timestamp_column], format="mixed", errors="coerce", utc=True)
     if timestamps.isna().any():
         raise ValueError(f"column {timestamp_column!r} contains invalid timestamps")
@@ -92,4 +123,4 @@ def load_market_csv(
     if volume_column is not None:
         volume_values = _numeric_column(frame, volume_column, non_negative=True)
         volume = pd.Series(volume_values.to_numpy(), index=index, name="volume")
-    return MarketData(close, volume, source.name, _fingerprint(close, volume))
+    return MarketData(close, volume, source_name, _fingerprint(close, volume))
