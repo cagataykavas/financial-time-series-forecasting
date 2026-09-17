@@ -119,7 +119,15 @@ docker build -t financial-time-series-forecasting .
 docker run --rm -p 8000:8000 financial-time-series-forecasting
 ```
 
-The release image installs the built wheel and runs as a non-root user. The API is intentionally a deterministic demonstration boundary, not a market-data ingestion service.
+The release image installs the built wheel and runs as a non-root user. The API exposes both a deterministic demonstration boundary and the same governed real-data evaluation used by the CLI:
+
+```bash
+curl -X POST http://localhost:8000/v1/evaluations \
+  -H 'content-type: application/json' \
+  --data @market-evaluation.json
+```
+
+`market-evaluation.json` contains a `source_name`, optional `seed`, and 320–5,000 ordered observations with `timestamp`, positive `close`, and optional non-negative `volume`. Extra fields, mixed volume availability, duplicate timestamps, unordered timestamps, and non-finite values fail closed with a `422` response. The response includes the normalized dataset fingerprint, fold boundaries, metrics, uncertainty evaluation, and promotion decision; the service never claims that a historical pass implies live profitability.
 
 The `/demo` boundary validates `rows` (320–2,000) and `cost_bps` (0–1,000) before starting model work, so malformed or unexpectedly expensive requests receive a `422` response. Library entry points also reject non-finite values, duplicate or unordered timestamps, missing volume timestamps and invalid target matrices before fitting.
 
