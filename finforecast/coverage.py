@@ -104,9 +104,7 @@ def audit_temporal_coverage(
 
     truth, lows, highs = _interval_arrays(actual, lower, upper)
     if truth.size < minimum_window_size:
-        raise ValueError(
-            f"coverage audit requires at least {minimum_window_size} observations"
-        )
+        raise ValueError(f"coverage audit requires at least {minimum_window_size} observations")
 
     covered = (truth >= lows) & (truth <= highs)
     widths = highs - lows
