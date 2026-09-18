@@ -106,7 +106,38 @@ The compatibility report compares gradient boosting with the zero-return baselin
 
 The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample prediction segment**. Coverage and interval width are then measured on the later segment. The implementation uses the finite-sample conformal rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
 
-This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
+This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use additionally requires local coverage monitoring and a governed recalibration policy.
+
+### Temporal coverage gate
+
+`audit_temporal_coverage` prevents acceptable aggregate coverage from hiding a failed market
+segment. It evaluates contiguous, non-overlapping out-of-sample windows and returns both aggregate
+and worst-window evidence:
+
+```python
+from finforecast.coverage import audit_temporal_coverage
+
+report = audit_temporal_coverage(
+    actual,
+    lower,
+    upper,
+    target_coverage=0.90,
+    tolerance=0.05,
+    window_size=50,
+    minimum_window_size=20,
+)
+if not report.passed:
+    print(report.reasons, report.worst_window_coverage)
+```
+
+An undersized final segment is merged into the preceding window instead of producing a noisy,
+low-sample decision. The JSON-ready report distinguishes `overall_undercoverage` from
+`temporal_undercoverage`, records every boundary and includes interval-width evidence.
+
+This is a deterministic monitoring gate, not a proof of conditional coverage. Window length and
+tolerance are policy parameters; overlapping horizons, autocorrelation and regime-dependent
+coverage still require horizon-aware calibration, richer conditional tests and operational
+recalibration rules.
 
 ## API and container
 
