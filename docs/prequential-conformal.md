@@ -40,6 +40,36 @@ start and exclusive end of its calibration slice, so a reviewer can reconstruct 
 information set used at issuance time. Pandas inputs must have identical, unique,
 monotonically increasing indexes; the original labels are restored on the output.
 
+## Resumable stream processing
+
+`PrequentialConformalCalibrator` exposes the same interval logic as a two-phase stream:
+issue a forecast first, then admit its outcome separately. Outcomes must arrive in
+position order and exactly once. Before every issue, the calibrator checks that all
+feedback required by `feedback_delay` has arrived; an overdue label fails with
+`MISSING_FEEDBACK` instead of silently shrinking the calibration set.
+
+```python
+from finforecast.prequential import PrequentialConformalCalibrator
+
+calibrator = PrequentialConformalCalibrator(policy)
+interval = calibrator.issue(point_forecast)
+# Persist or publish the interval before reading its outcome.
+calibrator.observe(calibrator.next_position - 1, realized_value)
+
+checkpoint_json = calibrator.checkpoint()
+calibrator = PrequentialConformalCalibrator.restore(
+    checkpoint_json,
+    policy=policy,  # the expected deployment policy is always supplied externally
+)
+```
+
+The canonical JSON checkpoint contains only the bounded residual window, still-pending
+point forecasts, monotonic positions, and cumulative operation count. Restore validates
+the schema, expected policy, SHA-256 integrity digest, finite values, contiguous state,
+and exact operation accounting before accepting it. The digest detects accidental
+corruption; it is not a signature and does not authenticate an untrusted checkpoint.
+Write the checkpoint atomically in the surrounding service.
+
 ## Failure and resource model
 
 The runner fails closed with stable, non-sensitive error codes for malformed vectors,
@@ -62,7 +92,7 @@ coverage. Use the existing temporal coverage and breach-independence audits on a
 untouched evaluation window before promotion.
 
 `feedback_delay` must match the real label or horizon availability contract; setting it
-too low reintroduces look-ahead bias. The routine is an offline replay, not a concurrent
-state store: a live service must persist residual arrival order, make updates atomic,
-and prevent duplicate labels. Symmetric intervals also do not represent asymmetric
-financial loss, tradability, or expected profit.
+too low reintroduces look-ahead bias. The streaming calibrator enforces ordered,
+single-process transitions but is not a database or distributed lock: a live service
+must make checkpoint replacement and worker ownership atomic. Symmetric intervals also
+do not represent asymmetric financial loss, tradability, or expected profit.

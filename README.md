@@ -16,7 +16,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
 | Model comparison | Circular moving-block bootstrap of paired loss differences | IID resampling that erases short-range dependence |
 | Decision economics | Asymmetric under/over-forecast cost and action cost | Statistically better but operationally worse model |
-| Uncertainty | Split conformal absolute-residual intervals | Uncalibrated confidence claims |
+| Uncertainty | Split and resumable prequential conformal intervals | Uncalibrated or look-ahead confidence claims |
 | Governance | MAE improvement, fold-win and cost gates | Automatic promotion from one aggregate score |
 | Reproducibility | Canonical SHA-256 model manifest | Untraceable candidate artifact |
 | Delivery | Wheel, CLI, FastAPI and non-root container | Source-tree-only demo |
@@ -57,6 +57,7 @@ finforecast/
 ├── intervals.py    # finite-sample split conformal calibration
 ├── metrics.py      # point, probabilistic and business metrics
 ├── models.py       # model factories; no fitted global instances
+├── prequential.py  # leakage-safe rolling intervals and resumable stream state
 ├── registry.py     # multi-gate promotion and hashed manifest
 └── splits.py       # expanding/rolling splitter with purge gap
 ```

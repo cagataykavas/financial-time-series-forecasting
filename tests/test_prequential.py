@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from finforecast.prequential import (
+    PrequentialConformalCalibrator,
     PrequentialConformalError,
     PrequentialConformalPolicy,
     prequential_conformal_intervals,
@@ -198,3 +202,157 @@ def test_reports_exact_calibration_operation_count() -> None:
 
     assert result.calibration_operations == 2 + 3 + 3 + 3 + 3
     assert len(result.intervals) == 5
+
+
+def test_streaming_calibrator_matches_batch_replay() -> None:
+    actual = [0.0, 1.0, 4.0, 3.0, 8.0, 5.0, 12.0]
+    predicted = [0.0, 0.5, 2.0, 4.0, 5.0, 7.0, 9.0]
+    selected_policy = policy(window=3, feedback_delay=1)
+    batch = prequential_conformal_intervals(actual, predicted, policy=selected_policy)
+    calibrator = PrequentialConformalCalibrator(selected_policy)
+
+    streamed = []
+    for position, (outcome, point) in enumerate(zip(actual, predicted, strict=True)):
+        interval = calibrator.issue(point)
+        if interval is not None:
+            streamed.append(interval)
+        calibrator.observe(position, outcome)
+
+    assert tuple(streamed) == batch.intervals
+    assert calibrator.calibration_operations == batch.calibration_operations
+
+
+def test_feedback_contract_fails_closed_when_an_outcome_is_overdue() -> None:
+    calibrator = PrequentialConformalCalibrator(policy(feedback_delay=2))
+
+    assert calibrator.issue(10.0) is None
+    assert calibrator.issue(11.0) is None
+    assert calibrator.issue(12.0) is None
+    with pytest.raises(PrequentialConformalError) as error:
+        calibrator.issue(13.0)
+    assert error.value.code == "MISSING_FEEDBACK"
+    assert calibrator.next_position == 3
+
+    calibrator.observe(0, 10.5)
+    assert calibrator.issue(13.0) is None
+
+
+def test_feedback_must_be_ordered_and_exactly_once() -> None:
+    calibrator = PrequentialConformalCalibrator(policy(feedback_delay=1))
+    calibrator.issue(1.0)
+    calibrator.issue(2.0)
+
+    with pytest.raises(PrequentialConformalError) as error:
+        calibrator.observe(1, 2.5)
+    assert error.value.code == "OUT_OF_ORDER_FEEDBACK"
+
+    calibrator.observe(0, 1.5)
+    with pytest.raises(PrequentialConformalError) as error:
+        calibrator.observe(0, 1.5)
+    assert error.value.code == "DUPLICATE_FEEDBACK"
+
+    calibrator.observe(1, 2.5)
+    with pytest.raises(PrequentialConformalError) as error:
+        calibrator.observe(2, 3.0)
+    assert error.value.code == "UNKNOWN_FORECAST"
+
+
+def test_checkpoint_resume_matches_uninterrupted_stream() -> None:
+    selected_policy = policy(window=3, feedback_delay=1)
+    actual = [2.0, 2.5, 5.0, 3.0, 8.0, 6.0, 10.0, 8.0]
+    predicted = [1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0, 9.0]
+
+    uninterrupted = PrequentialConformalCalibrator(selected_policy)
+    expected = []
+    for position, (outcome, point) in enumerate(zip(actual, predicted, strict=True)):
+        interval = uninterrupted.issue(point)
+        if interval is not None:
+            expected.append(interval)
+        uninterrupted.observe(position, outcome)
+
+    resumed = PrequentialConformalCalibrator(selected_policy)
+    actual_intervals = []
+    for position in range(4):
+        interval = resumed.issue(predicted[position])
+        if interval is not None:
+            actual_intervals.append(interval)
+        resumed.observe(position, actual[position])
+    checkpoint = resumed.checkpoint()
+    resumed = PrequentialConformalCalibrator.restore(checkpoint, policy=selected_policy)
+    for position in range(4, len(actual)):
+        interval = resumed.issue(predicted[position])
+        if interval is not None:
+            actual_intervals.append(interval)
+        resumed.observe(position, actual[position])
+
+    assert actual_intervals == expected
+    assert resumed.checkpoint() == uninterrupted.checkpoint()
+
+
+def test_checkpoint_preserves_pending_forecasts() -> None:
+    selected_policy = policy(feedback_delay=2)
+    calibrator = PrequentialConformalCalibrator(selected_policy)
+    calibrator.issue(10.0)
+    calibrator.issue(11.0)
+    calibrator.issue(12.0)
+
+    restored = PrequentialConformalCalibrator.restore(
+        calibrator.checkpoint(), policy=selected_policy
+    )
+    restored.observe(0, 10.5)
+    assert restored.issue(13.0) is None
+
+
+def test_checkpoint_detects_corruption_and_policy_drift() -> None:
+    selected_policy = policy()
+    calibrator = PrequentialConformalCalibrator(selected_policy)
+    calibrator.issue(1.0)
+    calibrator.observe(0, 2.0)
+    checkpoint = calibrator.checkpoint()
+
+    payload = json.loads(checkpoint)
+    payload["state"]["residuals"][0][1] = 999.0
+    corrupted = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    with pytest.raises(PrequentialConformalError) as error:
+        PrequentialConformalCalibrator.restore(corrupted, policy=selected_policy)
+    assert error.value.code == "CHECKPOINT_INTEGRITY_MISMATCH"
+
+    with pytest.raises(PrequentialConformalError) as error:
+        PrequentialConformalCalibrator.restore(
+            checkpoint,
+            policy=policy(coverage=0.9),
+        )
+    assert error.value.code == "CHECKPOINT_POLICY_MISMATCH"
+
+
+def test_checkpoint_rejects_validly_checksummed_impossible_state() -> None:
+    selected_policy = policy()
+    checkpoint = json.loads(PrequentialConformalCalibrator(selected_policy).checkpoint())
+    checkpoint["state"]["calibration_operations"] = 1
+    content = {key: value for key, value in checkpoint.items() if key != "sha256"}
+    canonical = json.dumps(content, allow_nan=False, separators=(",", ":"), sort_keys=True)
+    checkpoint["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    with pytest.raises(PrequentialConformalError) as error:
+        PrequentialConformalCalibrator.restore(
+            json.dumps(checkpoint, separators=(",", ":"), sort_keys=True),
+            policy=selected_policy,
+        )
+    assert error.value.code == "INVALID_CHECKPOINT_STATE"
+
+
+@pytest.mark.parametrize(
+    ("action", "code"),
+    [
+        (lambda item: item.issue(float("nan")), "INVALID_POINT_FORECAST"),
+        (lambda item: item.observe(-1, 1.0), "INVALID_OBSERVATION_POSITION"),
+        (lambda item: item.observe(0, float("inf")), "INVALID_OUTCOME"),
+    ],
+)
+def test_streaming_calibrator_rejects_invalid_events(action: object, code: str) -> None:
+    calibrator = PrequentialConformalCalibrator(policy())
+    if code == "INVALID_OUTCOME":
+        calibrator.issue(1.0)
+    with pytest.raises(PrequentialConformalError) as error:
+        action(calibrator)  # type: ignore[operator]
+    assert error.value.code == code
