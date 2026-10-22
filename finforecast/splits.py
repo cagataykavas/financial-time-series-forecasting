@@ -10,7 +10,8 @@ from .domain import FoldBoundary
 class WalkForwardConfig:
     min_train_size: int = 250
     test_size: int = 20
-    gap: int = 0
+    gap: int = 1
+    label_horizon: int = 1
     step_size: int | None = None
     max_train_size: int | None = None
 
@@ -19,8 +20,16 @@ class WalkForwardConfig:
             raise ValueError("min_train_size must be at least 2")
         if self.test_size < 1:
             raise ValueError("test_size must be positive")
-        if self.gap < 0:
-            raise ValueError("gap cannot be negative")
+        if isinstance(self.gap, bool) or not isinstance(self.gap, int) or self.gap < 0:
+            raise ValueError("gap must be a non-negative integer")
+        if (
+            isinstance(self.label_horizon, bool)
+            or not isinstance(self.label_horizon, int)
+            or self.label_horizon < 1
+        ):
+            raise ValueError("label_horizon must be a positive integer")
+        if self.gap < self.label_horizon:
+            raise ValueError("gap must be at least label_horizon to prevent label overlap")
         if self.step_size is not None and self.step_size < 1:
             raise ValueError("step_size must be positive")
         if self.max_train_size is not None and self.max_train_size < self.min_train_size:
@@ -31,7 +40,8 @@ class WalkForwardSplitter:
     """Deterministic expanding or rolling time-ordered folds.
 
     End indices follow Python's exclusive convention. ``gap`` purges observations
-    immediately before the test window when labels or features overlap in time.
+    immediately before the test window. It must cover ``label_horizon`` so the
+    latest training label cannot use an observation from the test period.
     """
 
     def __init__(self, config: WalkForwardConfig) -> None:
@@ -61,6 +71,9 @@ class WalkForwardSplitter:
     def _assert_temporal_isolation(self, boundary: FoldBoundary) -> None:
         if boundary.train_end + self.config.gap != boundary.test_start:
             raise AssertionError("fold violates configured purge gap")
+        latest_train_label_end = boundary.train_end - 1 + self.config.label_horizon
+        if latest_train_label_end >= boundary.test_start:
+            raise AssertionError("fold contains training labels that overlap the test period")
         if boundary.train_size < self.config.min_train_size:
             raise AssertionError("fold has insufficient training history")
         if boundary.test_size < 1:

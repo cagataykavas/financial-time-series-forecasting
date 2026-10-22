@@ -24,7 +24,13 @@ def _build_evidence(
     seed: int,
 ) -> dict[str, Any]:
     supervised = make_supervised_features(close, volume)
-    splitter = WalkForwardSplitter(WalkForwardConfig(min_train_size=250, test_size=25, gap=1))
+    split_config = WalkForwardConfig(
+        min_train_size=250,
+        test_size=25,
+        gap=1,
+        label_horizon=1,
+    )
+    splitter = WalkForwardSplitter(split_config)
     runner = BacktestRunner(splitter, default_model_factories(seed))
     backtest = runner.run(supervised)
     cost = BusinessCost(
@@ -63,11 +69,12 @@ def _build_evidence(
         else "Historical evaluation is not evidence of future market profitability."
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
-            "gap": 1,
+            "gap": split_config.gap,
+            "label_horizon": split_config.label_horizon,
             "fold_count": len(backtest.folds),
             "out_of_sample_observations": len(predictions),
             "folds": [fold["boundary"] for fold in backtest.folds],
@@ -77,6 +84,7 @@ def _build_evidence(
         "promotion_decision": decision.as_dict(),
         "claims": [
             "All reported forecasts are out of sample within the evaluation.",
+            "Training label horizons are purged before every test window.",
             (
                 "The conformal interval is calibrated on an earlier prediction segment "
                 "and evaluated later."
