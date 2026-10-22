@@ -10,7 +10,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 |---|---|---|
 | Data ingestion | Ordered CSV validation and normalized SHA-256 identity | Silent sorting, duplicate timestamps and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
-| Label overlap | Configurable purge gap | Train/test boundary contamination |
+| Label overlap | Horizon-aware purge contract | Training labels reaching into the test period |
 | Baselines | Zero return, historical mean, seasonal naive | Beating no meaningful comparator |
 | Candidates | Standardized ridge and histogram gradient boosting | Preprocessing fit outside each fold |
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
@@ -36,11 +36,15 @@ flowchart TD
     G --> A["Hashed candidate manifest"]
 ```
 
-The split contract uses exclusive end offsets and checks this invariant for every fold:
+The split contract uses exclusive end offsets and checks both invariants for every fold:
 
 ```text
 train_end + purge_gap == test_start
+latest_train_label_end = train_end - 1 + label_horizon < test_start
 ```
+
+`purge_gap` must be at least `label_horizon`; unsafe multi-step configurations are rejected
+before any model is fitted. The default one-step target therefore uses a one-observation gap.
 
 Models are constructed and fitted inside the fold loop. The test index must be unique and increasing; overlapping test windows are rejected instead of silently double-counting forecasts.
 
@@ -135,6 +139,11 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 
 ## Claims and non-claims
 
-This repository demonstrates evaluation and release engineering. It does **not** claim alpha, profitability or readiness for live capital. The CSV boundary validates structure, not economic correctness: production data still needs point-in-time vendor guarantees, corporate-action and delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning, horizon-specific label purging and live coverage monitoring.
+This repository demonstrates evaluation and release engineering. It does **not** claim alpha,
+profitability or readiness for live capital. The CSV boundary validates structure, not economic
+correctness: production data still needs point-in-time vendor guarantees, corporate-action and
+delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning
+and live coverage monitoring.
 
-Those are explicit boundaries because a credible financial ML project should make invalid conclusions difficult—not merely make charts attractive.
+Those are explicit boundaries because a credible financial ML project should make invalid
+conclusions difficult—not merely make charts attractive.

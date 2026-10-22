@@ -21,6 +21,35 @@ def test_expanding_split_respects_gap_and_boundaries():
     assert all(fold.train_end + 2 == fold.test_start for fold in folds)
 
 
+@pytest.mark.parametrize(("label_horizon", "gap"), [(1, 1), (2, 2), (5, 8), (20, 20)])
+def test_label_horizon_is_purged_from_every_test_window(label_horizon, gap):
+    config = WalkForwardConfig(
+        min_train_size=10,
+        test_size=4,
+        gap=gap,
+        label_horizon=label_horizon,
+    )
+    folds = WalkForwardSplitter(config).materialize(80)
+
+    assert folds
+    assert all(fold.train_end - 1 + config.label_horizon < fold.test_start for fold in folds)
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"gap": 1, "label_horizon": 2}, "at least label_horizon"),
+        ({"gap": 0}, "at least label_horizon"),
+        ({"label_horizon": 0}, "positive integer"),
+        ({"label_horizon": True}, "positive integer"),
+        ({"gap": True}, "non-negative integer"),
+    ],
+)
+def test_unsafe_label_overlap_configuration_is_rejected(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        WalkForwardConfig(**kwargs)
+
+
 def test_rolling_split_caps_training_history():
     folds = WalkForwardSplitter(
         WalkForwardConfig(min_train_size=10, max_train_size=12, test_size=5)

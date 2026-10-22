@@ -65,7 +65,7 @@ def test_custom_target_column_is_supported():
         {"zero": ZeroReturnRegressor},
         target_column="label",
     )
-    assert len(runner.run(frame).predictions) == 25
+    assert len(runner.run(frame).predictions) == 24
 
 
 def test_backtest_rejects_bad_data_before_model_fit():
