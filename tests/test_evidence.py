@@ -13,9 +13,12 @@ def test_evidence_is_deterministic_and_explicit_about_claim_scope():
     first = build_evidence(rows=520, seed=9)
     second = build_evidence(rows=520, seed=9)
     assert first == second
-    assert first["schema_version"] == 2
+    assert first["schema_version"] == 3
     assert first["validation"]["fold_count"] > 1
     assert first["validation"]["gap"] >= first["validation"]["label_horizon"] == 1
+    assert first["validation"]["target_spec"]["horizon"] == 1
+    assert len(first["validation"]["target_spec_sha256"]) == 64
+    assert len(first["validation"]["target_values_sha256"]) == 64
     assert first["uncertainty"]["evaluation_size"] > 0
     assert any("label horizons are purged" in claim for claim in first["claims"])
     assert any("not evidence of market profitability" in claim for claim in first["claims"])

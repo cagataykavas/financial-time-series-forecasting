@@ -6,8 +6,10 @@ import pytest
 
 from finforecast.backtest import BacktestRunner
 from finforecast.baselines import HistoricalMeanRegressor, ZeroReturnRegressor
+from finforecast.features import ForecastTargetSpec, make_supervised_features
 from finforecast.metrics import BusinessCost
 from finforecast.splits import WalkForwardConfig, WalkForwardSplitter
+from finforecast.synthetic import synthetic_market
 
 
 def dataset(rows: int = 40) -> pd.DataFrame:
@@ -66,6 +68,37 @@ def test_custom_target_column_is_supported():
         target_column="label",
     )
     assert len(runner.run(frame).predictions) == 24
+
+
+def test_declared_target_horizon_must_match_split_policy_before_fitting():
+    spec = ForecastTargetSpec(horizon=3)
+    with pytest.raises(ValueError, match="label_horizon must match"):
+        BacktestRunner(
+            WalkForwardSplitter(
+                WalkForwardConfig(min_train_size=15, test_size=5, gap=3, label_horizon=2)
+            ),
+            {"zero": ZeroReturnRegressor},
+            target_column=spec.column,
+            target_spec=spec,
+        )
+
+
+def test_backtest_rejects_target_built_under_a_different_spec():
+    close, volume = synthetic_market(rows=100, seed=3)
+    built_spec = ForecastTargetSpec(horizon=2)
+    policy_spec = ForecastTargetSpec(horizon=3)
+    data = make_supervised_features(close, volume, target_spec=built_spec)
+    runner = BacktestRunner(
+        WalkForwardSplitter(
+            WalkForwardConfig(min_train_size=20, test_size=5, gap=3, label_horizon=3)
+        ),
+        {"zero": ZeroReturnRegressor},
+        target_column=policy_spec.column,
+        target_spec=policy_spec,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        runner.run(data)
 
 
 def test_backtest_rejects_bad_data_before_model_fit():

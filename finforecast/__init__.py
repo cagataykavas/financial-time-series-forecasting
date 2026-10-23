@@ -3,6 +3,7 @@
 from .backtest import BacktestRunner
 from .data import MarketData, load_market_csv
 from .engine import ForecastExperiment
+from .features import ForecastTargetSpec
 from .intervals import SplitConformalCalibrator
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
@@ -12,6 +13,7 @@ __all__ = [
     "__version__",
     "BacktestRunner",
     "ForecastExperiment",
+    "ForecastTargetSpec",
     "MarketData",
     "SplitConformalCalibrator",
     "WalkForwardConfig",

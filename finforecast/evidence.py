@@ -8,7 +8,7 @@ import pandas as pd
 
 from .backtest import BacktestRunner
 from .data import MarketData
-from .features import make_supervised_features
+from .features import ForecastTargetSpec, make_supervised_features
 from .intervals import SplitConformalCalibrator
 from .metrics import BusinessCost, interval_metrics, pinball_loss
 from .models import default_model_factories
@@ -23,15 +23,21 @@ def _build_evidence(
     dataset_metadata: dict[str, Any],
     seed: int,
 ) -> dict[str, Any]:
-    supervised = make_supervised_features(close, volume)
+    target_spec = ForecastTargetSpec(horizon=1)
+    supervised = make_supervised_features(close, volume, target_spec=target_spec)
     split_config = WalkForwardConfig(
         min_train_size=250,
         test_size=25,
         gap=1,
-        label_horizon=1,
+        label_horizon=target_spec.horizon,
     )
     splitter = WalkForwardSplitter(split_config)
-    runner = BacktestRunner(splitter, default_model_factories(seed))
+    runner = BacktestRunner(
+        splitter,
+        default_model_factories(seed),
+        target_column=target_spec.column,
+        target_spec=target_spec,
+    )
     backtest = runner.run(supervised)
     cost = BusinessCost(
         underforecast_weight=1.5,
@@ -69,12 +75,15 @@ def _build_evidence(
         else "Historical evaluation is not evidence of future market profitability."
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
             "gap": split_config.gap,
             "label_horizon": split_config.label_horizon,
+            "target_spec": target_spec.as_dict(),
+            "target_spec_sha256": target_spec.sha256,
+            "target_values_sha256": supervised.attrs["target_values_sha256"],
             "fold_count": len(backtest.folds),
             "out_of_sample_observations": len(predictions),
             "folds": [fold["boundary"] for fold in backtest.folds],
