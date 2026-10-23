@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from finforecast.features import make_supervised_features
+from finforecast.features import ForecastTargetSpec, assert_target_spec, make_supervised_features
 
 
 def prices(rows: int = 80) -> pd.Series:
@@ -31,5 +31,49 @@ def test_features_reject_malformed_market_series():
 
 
 def test_features_require_enough_history_for_rolling_windows():
-    with pytest.raises(ValueError, match="63"):
+    with pytest.raises(ValueError, match="not enough"):
         make_supervised_features(prices(20))
+
+
+def test_target_spec_builds_exact_forward_return_for_declared_horizon():
+    close = prices()
+    spec = ForecastTargetSpec(horizon=3)
+    result = make_supervised_features(close, target_spec=spec)
+    timestamp = result.index[0]
+    position = close.index.get_loc(timestamp)
+
+    expected = close.iloc[position + 3] / close.iloc[position] - 1.0
+    assert result.loc[timestamp, spec.column] == pytest.approx(expected)
+    assert result.attrs["target_spec"] == spec.as_dict()
+    assert result.attrs["target_spec_sha256"] == spec.sha256
+    assert len(result.attrs["target_values_sha256"]) == 64
+    assert_target_spec(result, spec)
+
+
+@pytest.mark.parametrize("horizon", [0, 253, -1])
+def test_target_spec_rejects_unbounded_horizons(horizon):
+    with pytest.raises(ValueError, match="between 1 and 252"):
+        ForecastTargetSpec(horizon=horizon)
+
+
+def test_target_spec_rejects_boolean_horizon():
+    with pytest.raises(TypeError, match="integer"):
+        ForecastTargetSpec(horizon=True)
+
+
+def test_target_evidence_is_deterministic_and_tamper_evident():
+    first = ForecastTargetSpec(horizon=5)
+    second = ForecastTargetSpec(horizon=5)
+    other = ForecastTargetSpec(horizon=6)
+    frame = make_supervised_features(prices(90), target_spec=first)
+
+    assert first.sha256 == second.sha256
+    assert first.sha256 != other.sha256
+    frame.attrs["target_spec"]["horizon"] = 6
+    with pytest.raises(ValueError, match="digest is invalid"):
+        assert_target_spec(frame, first)
+
+    frame = make_supervised_features(prices(90), target_spec=first)
+    frame.loc[frame.index[0], first.column] += 0.01
+    with pytest.raises(ValueError, match="target values digest is invalid"):
+        assert_target_spec(frame, first)

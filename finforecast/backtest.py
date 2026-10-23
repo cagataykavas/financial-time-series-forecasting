@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .baselines import Regressor
-from .features import assert_no_target_leakage
+from .features import ForecastTargetSpec, assert_no_target_leakage, assert_target_spec
 from .metrics import BusinessCost, mae, mase, rmse, smape
 from .splits import WalkForwardSplitter
 
@@ -30,6 +30,7 @@ class BacktestRunner:
         model_factories: dict[str, Callable[[], Regressor]],
         *,
         target_column: str = "target_next_return",
+        target_spec: ForecastTargetSpec | None = None,
     ) -> None:
         if not model_factories:
             raise ValueError("at least one model factory is required")
@@ -38,11 +39,19 @@ class BacktestRunner:
             raise ValueError(f"model names are reserved output columns: {sorted(reserved)}")
         if not target_column:
             raise ValueError("target_column cannot be empty")
+        if target_spec is not None:
+            if target_column != target_spec.column:
+                raise ValueError("target_column must match target_spec")
+            if splitter.config.label_horizon != target_spec.horizon:
+                raise ValueError("split label_horizon must match target_spec horizon")
         self.splitter = splitter
         self.model_factories = model_factories
         self.target_column = target_column
+        self.target_spec = target_spec
 
     def run(self, data: pd.DataFrame) -> BacktestResult:
+        if self.target_spec is not None:
+            assert_target_spec(data, self.target_spec)
         assert_no_target_leakage(data, self.target_column)
         if not data.index.is_monotonic_increasing or not data.index.is_unique:
             raise ValueError("observations must have a unique, increasing time index")

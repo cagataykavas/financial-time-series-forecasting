@@ -6,21 +6,40 @@ import numpy as np
 import pandas as pd
 
 from .backtest import BacktestRunner
+from .features import ForecastTargetSpec
 from .metrics import mae, rmse
 from .models import default_model_factories
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 
 class ForecastExperiment:
-    def __init__(self, min_train: int = 250, test_size: int = 20, seed: int = 42) -> None:
-        WalkForwardConfig(min_train_size=min_train, test_size=test_size)
+    def __init__(
+        self,
+        min_train: int = 250,
+        test_size: int = 20,
+        seed: int = 42,
+        target_spec: ForecastTargetSpec | None = None,
+    ) -> None:
+        resolved_target = target_spec or ForecastTargetSpec()
+        WalkForwardConfig(
+            min_train_size=min_train,
+            test_size=test_size,
+            gap=resolved_target.horizon,
+            label_horizon=resolved_target.horizon,
+        )
         self.min_train = min_train
         self.test_size = test_size
         self.seed = seed
+        self.target_spec = resolved_target
 
     def walk_forward(self, data: pd.DataFrame) -> pd.DataFrame:
         splitter = WalkForwardSplitter(
-            WalkForwardConfig(min_train_size=self.min_train, test_size=self.test_size)
+            WalkForwardConfig(
+                min_train_size=self.min_train,
+                test_size=self.test_size,
+                gap=self.target_spec.horizon,
+                label_horizon=self.target_spec.horizon,
+            )
         )
         factories = default_model_factories(self.seed)
         selected = {
@@ -28,7 +47,16 @@ class ForecastExperiment:
             for name, factory in factories.items()
             if name in {"naive_zero", "ridge", "gradient_boosting"}
         }
-        return BacktestRunner(splitter, selected).run(data).predictions.drop(columns="fold")
+        return (
+            BacktestRunner(
+                splitter,
+                selected,
+                target_column=self.target_spec.column,
+                target_spec=self.target_spec,
+            )
+            .run(data)
+            .predictions.drop(columns="fold")
+        )
 
     @staticmethod
     def _strategy_metrics(

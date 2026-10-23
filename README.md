@@ -11,6 +11,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 | Data ingestion | Ordered CSV validation and normalized SHA-256 identity | Silent sorting, duplicate timestamps and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
 | Label overlap | Horizon-aware purge contract | Training labels reaching into the test period |
+| Target contract | Immutable horizon/specification digest | Target construction drifting from the purge policy |
 | Baselines | Zero return, historical mean, seasonal naive | Beating no meaningful comparator |
 | Candidates | Standardized ridge and histogram gradient boosting | Preprocessing fit outside each fold |
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
@@ -43,8 +44,11 @@ train_end + purge_gap == test_start
 latest_train_label_end = train_end - 1 + label_horizon < test_start
 ```
 
-`purge_gap` must be at least `label_horizon`; unsafe multi-step configurations are rejected
-before any model is fitted. The default one-step target therefore uses a one-observation gap.
+`ForecastTargetSpec` constructs the forward simple return for a bounded 1–252 observation
+horizon and emits canonical SHA-256 specification and target-value evidence. `BacktestRunner` can
+require that evidence and rejects a missing, modified or policy-mismatched target before any model is fitted.
+The splitter's `label_horizon` must equal the target horizon and `purge_gap` must be at least that
+horizon. The default one-step target therefore uses a one-observation gap.
 
 Models are constructed and fitted inside the fold loop. The test index must be unique and increasing; overlapping test windows are rejected instead of silently double-counting forecasts.
 
@@ -65,7 +69,9 @@ finforecast/
 └── splits.py       # expanding/rolling splitter with purge gap
 ```
 
-`ForecastExperiment` remains as a compatibility facade for the earlier public API. New integrations should compose `WalkForwardSplitter` and `BacktestRunner` directly.
+`ForecastExperiment` remains as a compatibility facade for the earlier public API and enforces the
+default one-step target evidence. New integrations should compose `ForecastTargetSpec`,
+`WalkForwardSplitter` and `BacktestRunner` directly.
 
 ## Run the governed experiment
 
