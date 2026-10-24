@@ -8,7 +8,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 
 | Concern | Implementation | Failure guarded |
 |---|---|---|
-| Data ingestion | Ordered CSV validation and normalized SHA-256 identity | Silent sorting, duplicate timestamps and untraceable inputs |
+| Data ingestion | Ordered CSV validation, point-in-time revision selection and SHA-256 lineage | Silent sorting, future revisions and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
 | Label overlap | Horizon-aware purge contract | Training labels reaching into the test period |
 | Target contract | Immutable horizon/specification digest | Target construction drifting from the purge policy |
@@ -98,7 +98,29 @@ finforecast --csv prices.csv --output artifacts/market
 finforecast --csv prices.csv --evidence --output artifacts/market-evidence
 ```
 
-Column names are configurable with `--timestamp-column`, `--close-column` and `--volume-column`. Use `--no-volume` for a close-only file. The CLI requires at least 320 raw observations so the 60-period features, minimum training window and out-of-sample evaluation all remain non-empty.
+Column names are configurable with `--timestamp-column`, `--close-column` and `--volume-column`. Use `--no-volume` for a close-only file. The CLI requires at least 320 selected observations so the 60-period features, minimum training window and out-of-sample evaluation all remain non-empty.
+
+### Point-in-time revision snapshots
+
+Revision-bearing vendor exports can additionally declare `available_at` and `revision_id`. Supply a
+timezone-aware `--as-of` cutoff to select, for every observation timestamp, only the latest revision
+available by that instant:
+
+```bash
+finforecast \
+  --csv price-vintages.csv \
+  --as-of 2026-06-30T23:59:59Z \
+  --evidence \
+  --output artifacts/market-vintage
+```
+
+Rows must be ordered by `(timestamp, available_at)`. The loader rejects availability before the
+observation, ambiguous availability times, reused revision IDs and malformed IDs. Evidence records
+the cutoff, selected/eligible/excluded counts, the selected revision digest and a full lineage digest
+over all supplied revisions. This makes the local selection reproducible and prevents a later vendor
+revision from entering an earlier snapshot. It cannot establish that vendor availability timestamps
+are truthful; that remains a source-governance requirement. Custom column names use
+`--available-at-column` and `--revision-column`.
 
 ## Promotion policy
 
@@ -147,8 +169,9 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 
 This repository demonstrates evaluation and release engineering. It does **not** claim alpha,
 profitability or readiness for live capital. The CSV boundary validates structure, not economic
-correctness: production data still needs point-in-time vendor guarantees, corporate-action and
-delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning
+correctness: the snapshot boundary enforces declared availability but cannot verify vendor claims.
+Production data still needs vendor guarantees, corporate-action and delisting treatment, market
+calendars, execution delay, slippage/impact, nested historical tuning
 and live coverage monitoring.
 
 Those are explicit boundaries because a credible financial ML project should make invalid
