@@ -5,10 +5,13 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .corporate_actions import CorporateActionSnapshot
 
 REVISION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -52,11 +55,18 @@ class MarketData:
     source_name: str
     sha256: str
     snapshot: MarketDataSnapshot | None = None
+    corporate_actions: CorporateActionSnapshot | None = None
 
     def metadata(self) -> dict[str, Any]:
         metadata = {
             "kind": (
-                "point_in_time_market_csv" if self.snapshot is not None else "external_market_csv"
+                "point_in_time_split_adjusted_market"
+                if self.corporate_actions is not None
+                else (
+                    "point_in_time_market_csv"
+                    if self.snapshot is not None
+                    else "external_market_csv"
+                )
             ),
             "source_name": self.source_name,
             "sha256": self.sha256,
@@ -67,6 +77,8 @@ class MarketData:
         }
         if self.snapshot is not None:
             metadata["snapshot"] = self.snapshot.metadata()
+        if self.corporate_actions is not None:
+            metadata["corporate_actions"] = self.corporate_actions.metadata()
         return metadata
 
 

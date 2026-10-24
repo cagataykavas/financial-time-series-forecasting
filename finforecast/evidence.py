@@ -74,13 +74,18 @@ def _build_evidence(
         if dataset["kind"] == "deterministic_synthetic_regime_shift"
         else "Historical evaluation is not evidence of future market profitability."
     )
-    snapshot_claims = (
-        ["Market revisions were selected by the declared as-of availability cutoff."]
-        if dataset["kind"] == "point_in_time_market_csv"
-        else []
-    )
+    snapshot_claims = []
+    if "snapshot" in dataset:
+        snapshot_claims.append(
+            "Market revisions were selected by the declared as-of availability cutoff."
+        )
+    if "corporate_actions" in dataset:
+        snapshot_claims.append(
+            "Split adjustments use only corporate-action revisions known and "
+            "effective at the cutoff."
+        )
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

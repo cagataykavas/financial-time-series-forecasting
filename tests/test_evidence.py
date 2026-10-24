@@ -13,7 +13,7 @@ def test_evidence_is_deterministic_and_explicit_about_claim_scope():
     first = build_evidence(rows=520, seed=9)
     second = build_evidence(rows=520, seed=9)
     assert first == second
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
     assert first["validation"]["fold_count"] > 1
     assert first["validation"]["gap"] >= first["validation"]["label_horizon"] == 1
     assert first["validation"]["target_spec"]["horizon"] == 1
