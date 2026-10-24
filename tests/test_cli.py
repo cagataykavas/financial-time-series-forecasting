@@ -34,6 +34,25 @@ def vintage_market_csv(tmp_path, rows: int = 340):
     return path, (timestamps[-1] + pd.Timedelta(hours=2)).isoformat()
 
 
+def split_actions_csv(tmp_path, market_path):
+    timestamps = pd.to_datetime(pd.read_csv(market_path)["timestamp"], utc=True)
+    path = tmp_path / "split-vintages.csv"
+    pd.DataFrame(
+        [
+            {
+                "action_id": "split-1",
+                "symbol": "ACME",
+                "action_type": "split",
+                "effective_at": timestamps.iloc[220],
+                "available_at": timestamps.iloc[180],
+                "revision_id": "vendor-r1",
+                "split_ratio": 2.0,
+            }
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
 def test_cli_runs_standard_evaluation_from_csv(tmp_path):
     output = tmp_path / "standard"
     assert main(["--csv", str(market_csv(tmp_path)), "--output", str(output)]) == 0
@@ -100,3 +119,51 @@ def test_cli_writes_point_in_time_selection_evidence(tmp_path):
     assert len(snapshot["lineage_sha256"]) == 64
     assert manifest["payload"]["dataset"]["snapshot"] == snapshot
     assert any("as-of availability cutoff" in claim for claim in evidence["claims"])
+
+
+def test_cli_binds_point_in_time_split_snapshot_to_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = split_actions_csv(tmp_path, source)
+    output = tmp_path / "split-adjusted-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--symbol",
+                "ACME",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    manifest = json.loads((output / "candidate_manifest.json").read_text())
+    action_snapshot = evidence["dataset"]["corporate_actions"]
+    assert evidence["dataset"]["kind"] == "point_in_time_split_adjusted_market"
+    assert action_snapshot["applied_splits"] == 1
+    assert action_snapshot["adjusted_market_sha256"] == evidence["dataset"]["sha256"]
+    assert manifest["payload"]["dataset"]["corporate_actions"] == action_snapshot
+    assert any("corporate-action revisions" in claim for claim in evidence["claims"])
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--corporate-actions-csv", "actions.csv"],
+        ["--symbol", "ACME"],
+        ["--corporate-actions-csv", "actions.csv", "--symbol", "ACME"],
+    ],
+)
+def test_cli_requires_complete_point_in_time_action_configuration(arguments):
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+    assert error.value.code == 2

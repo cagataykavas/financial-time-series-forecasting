@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+from .corporate_actions import apply_point_in_time_splits
 from .data import MarketData, load_market_csv
 from .engine import ForecastExperiment
 from .evidence import write_evidence
@@ -40,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--available-at-column", default="available_at")
     parser.add_argument("--revision-column", default="revision_id")
+    parser.add_argument(
+        "--corporate-actions-csv",
+        type=Path,
+        help="revision-bearing split feed applied at the --as-of cutoff",
+    )
+    parser.add_argument("--symbol", help="stable uppercase symbol for corporate actions")
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -50,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         "--evidence", action="store_true", help="build governed evaluation evidence"
     )
     args = parser.parse_args(argv)
+
+    if (args.corporate_actions_csv is None) != (args.symbol is None):
+        parser.error("--corporate-actions-csv and --symbol must be supplied together")
+    if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
+        parser.error("corporate actions require --csv and --as-of")
 
     market: MarketData | None = None
     if args.csv is not None:
@@ -67,6 +79,16 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         if len(market.close) < 320:
             parser.error("market CSV must contain at least 320 observations")
+        if args.corporate_actions_csv is not None:
+            try:
+                market = apply_point_in_time_splits(
+                    market,
+                    args.corporate_actions_csv,
+                    as_of=args.as_of,
+                    symbol=args.symbol,
+                )
+            except (TypeError, ValueError) as exc:
+                parser.error(str(exc))
 
     if args.evidence:
         result = write_evidence(
