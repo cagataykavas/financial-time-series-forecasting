@@ -18,6 +18,22 @@ def market_csv(tmp_path, rows: int = 340):
     return path
 
 
+def vintage_market_csv(tmp_path, rows: int = 340):
+    close, volume = synthetic_market(rows=rows, seed=11)
+    timestamps = close.index.tz_localize("UTC")
+    path = tmp_path / "market-vintages.csv"
+    pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "available_at": timestamps + pd.Timedelta(hours=1),
+            "revision_id": "vendor-r1",
+            "close": close.to_numpy(),
+            "volume": volume.to_numpy(),
+        }
+    ).to_csv(path, index=False)
+    return path, (timestamps[-1] + pd.Timedelta(hours=2)).isoformat()
+
+
 def test_cli_runs_standard_evaluation_from_csv(tmp_path):
     output = tmp_path / "standard"
     assert main(["--csv", str(market_csv(tmp_path)), "--output", str(output)]) == 0
@@ -54,3 +70,33 @@ def test_cli_rejects_undersized_csv(tmp_path):
     with pytest.raises(SystemExit) as error:
         main(["--csv", str(market_csv(tmp_path, rows=100))])
     assert error.value.code == 2
+
+
+def test_cli_writes_point_in_time_selection_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    output = tmp_path / "point-in-time-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    manifest = json.loads((output / "candidate_manifest.json").read_text())
+    snapshot = evidence["dataset"]["snapshot"]
+    assert evidence["dataset"]["kind"] == "point_in_time_market_csv"
+    assert snapshot["selected_observations"] == 340
+    assert snapshot["eligible_rows"] == snapshot["raw_rows"] == 340
+    assert len(snapshot["lineage_sha256"]) == 64
+    assert manifest["payload"]["dataset"]["snapshot"] == snapshot
+    assert any("as-of availability cutoff" in claim for claim in evidence["claims"])

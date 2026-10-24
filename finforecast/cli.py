@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--csv", type=Path, help="ordered market CSV to evaluate")
     parser.add_argument("--timestamp-column", default="timestamp")
     parser.add_argument("--close-column", default="close")
+    parser.add_argument(
+        "--as-of",
+        help="timezone-aware cutoff for a revision-bearing point-in-time CSV",
+    )
+    parser.add_argument("--available-at-column", default="available_at")
+    parser.add_argument("--revision-column", default="revision_id")
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -53,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
                 timestamp_column=args.timestamp_column,
                 close_column=args.close_column,
                 volume_column=None if args.no_volume else args.volume_column,
+                as_of=args.as_of,
+                available_at_column=(args.available_at_column if args.as_of else None),
+                revision_column=(args.revision_column if args.as_of else None),
             )
         except (TypeError, ValueError) as exc:
             parser.error(str(exc))
