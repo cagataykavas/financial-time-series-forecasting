@@ -80,7 +80,13 @@ def _build_evidence(
             "Market revisions were selected by the declared as-of availability cutoff."
         )
     if "corporate_actions" in dataset:
-        if dataset["corporate_actions"]["applied_cash_dividends"]:
+        action_snapshot = dataset["corporate_actions"]
+        if action_snapshot["fx_source_name"]:
+            snapshot_claims.append(
+                "Foreign-currency dividends use only FX revisions known at the cutoff, "
+                "subject to the declared observation-age budget."
+            )
+        if action_snapshot["applied_cash_dividends"]:
             snapshot_claims.append(
                 "Split and cash-dividend adjustments use only corporate-action revisions "
                 "known and effective at the cutoff."
@@ -91,7 +97,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
