@@ -60,7 +60,11 @@ class MarketData:
     def metadata(self) -> dict[str, Any]:
         metadata = {
             "kind": (
-                "point_in_time_split_adjusted_market"
+                (
+                    "point_in_time_total_return_adjusted_market"
+                    if self.corporate_actions.applied_cash_dividends
+                    else "point_in_time_split_adjusted_market"
+                )
                 if self.corporate_actions is not None
                 else (
                     "point_in_time_market_csv"

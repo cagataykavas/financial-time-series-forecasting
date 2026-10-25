@@ -80,12 +80,18 @@ def _build_evidence(
             "Market revisions were selected by the declared as-of availability cutoff."
         )
     if "corporate_actions" in dataset:
-        snapshot_claims.append(
-            "Split adjustments use only corporate-action revisions known and "
-            "effective at the cutoff."
-        )
+        if dataset["corporate_actions"]["applied_cash_dividends"]:
+            snapshot_claims.append(
+                "Split and cash-dividend adjustments use only corporate-action revisions "
+                "known and effective at the cutoff."
+            )
+        else:
+            snapshot_claims.append(
+                "Split adjustments use only corporate-action revisions known and "
+                "effective at the cutoff."
+            )
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
