@@ -65,6 +65,39 @@ def dividend_rows() -> list[dict[str, object]]:
     ]
 
 
+def foreign_dividend_rows() -> list[dict[str, object]]:
+    rows = dividend_rows()
+    for row in rows:
+        row["currency"] = "EUR"
+    return rows
+
+
+def fx_rates(tmp_path: Path, rows: list[dict[str, object]] | None = None) -> Path:
+    path = tmp_path / "fx-rates.csv"
+    pd.DataFrame(
+        rows
+        or [
+            {
+                "base_currency": "EUR",
+                "quote_currency": "USD",
+                "observed_at": "2024-01-03T00:00:00Z",
+                "available_at": "2024-01-03T01:00:00Z",
+                "revision_id": "fx-r1",
+                "rate": 1.1,
+            },
+            {
+                "base_currency": "EUR",
+                "quote_currency": "USD",
+                "observed_at": "2024-01-03T00:00:00Z",
+                "available_at": "2024-01-05T01:00:00Z",
+                "revision_id": "fx-r2",
+                "rate": 1.2,
+            },
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
 def action_rows() -> list[dict[str, object]]:
     return [
         {
@@ -176,11 +209,130 @@ def test_future_dividend_revision_cannot_enter_historical_snapshot(tmp_path: Pat
     assert adjusted.corporate_actions.superseded_revisions == 0
 
 
+def test_converts_foreign_dividend_with_latest_known_direct_fx_revision(tmp_path: Path):
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        as_of="2024-01-06T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        fx_rates_path=fx_rates(tmp_path),
+        max_fx_age="24 hours",
+    )
+
+    factor = (104.0 - (3.0 * 1.2)) / 104.0
+    assert adjusted.close.iloc[:2].tolist() == pytest.approx([100.0 * factor, 102.0 * factor])
+    snapshot = adjusted.corporate_actions
+    assert snapshot.fx_source_name == "fx-rates.csv"
+    assert snapshot.fx_max_age_seconds == 86_400.0
+    assert snapshot.fx_raw_rows == 2
+    assert snapshot.fx_eligible_revisions == 2
+    assert snapshot.fx_selected_observations == 1
+    assert snapshot.fx_superseded_revisions == 1
+    assert len(snapshot.fx_lineage_sha256) == 64
+
+
+def test_future_fx_revision_cannot_enter_historical_snapshot(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "fx-r1",
+            "rate": 1.1,
+        },
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-07T01:00:00Z",
+            "revision_id": "fx-r2",
+            "rate": 1.9,
+        },
+    ]
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        as_of="2024-01-06T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        fx_rates_path=fx_rates(tmp_path, rows),
+    )
+
+    factor = (104.0 - (3.0 * 1.1)) / 104.0
+    assert adjusted.close.iloc[:2].tolist() == pytest.approx([100.0 * factor, 102.0 * factor])
+    assert adjusted.corporate_actions.fx_excluded_unavailable_revisions == 1
+    assert adjusted.corporate_actions.fx_superseded_revisions == 0
+
+
+@pytest.mark.parametrize(
+    ("mutate", "max_age", "message"),
+    [
+        (
+            lambda rows: [{**rows[0], "observed_at": "2024-01-03T00:00:01Z"}],
+            "24 hours",
+            "at or before",
+        ),
+        (
+            lambda rows: [
+                {
+                    **rows[0],
+                    "observed_at": "2024-01-01T00:00:00Z",
+                    "available_at": "2024-01-01T01:00:00Z",
+                }
+            ],
+            "24 hours",
+            "maximum age",
+        ),
+        (
+            lambda rows: [{**rows[0], "base_currency": "USD", "quote_currency": "EUR"}],
+            "24 hours",
+            "required direct currency pairs",
+        ),
+        (lambda rows: [{**rows[0], "rate": 0.0}], "24 hours", "finite and positive"),
+    ],
+)
+def test_invalid_fx_contract_fails_closed(tmp_path: Path, mutate, max_age, message: str):
+    base = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "fx-r1",
+            "rate": 1.1,
+        }
+    ]
+    with pytest.raises(ValueError, match=message):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path, mutate(base)),
+            max_fx_age=max_age,
+        )
+
+
+def test_fx_input_is_rejected_when_no_foreign_dividend_is_applied(tmp_path: Path):
+    with pytest.raises(ValueError, match="not allowed"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path),
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "currency", "message"),
     [
         (lambda rows: rows, None, "declared price_currency"),
-        (lambda rows: rows, "TRY", "currency must match"),
+        (lambda rows: rows, "TRY", "require an FX-rate CSV"),
         (
             lambda rows: [{**rows[0], "cash_amount": 104.0}],
             "USD",

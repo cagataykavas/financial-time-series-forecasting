@@ -53,7 +53,7 @@ def split_actions_csv(tmp_path, market_path):
     return path
 
 
-def dividend_actions_csv(tmp_path, market_path):
+def dividend_actions_csv(tmp_path, market_path, currency="USD"):
     frame = pd.read_csv(market_path)
     timestamps = pd.to_datetime(frame["timestamp"], utc=True)
     reference_close = float(frame.loc[219, "close"])
@@ -68,7 +68,25 @@ def dividend_actions_csv(tmp_path, market_path):
                 "available_at": timestamps.iloc[180],
                 "revision_id": "vendor-r1",
                 "cash_amount": reference_close * 0.01,
-                "currency": "USD",
+                "currency": currency,
+            }
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
+def fx_rates_csv(tmp_path, market_path):
+    timestamps = pd.to_datetime(pd.read_csv(market_path)["timestamp"], utc=True)
+    path = tmp_path / "fx-vintages.csv"
+    pd.DataFrame(
+        [
+            {
+                "base_currency": "EUR",
+                "quote_currency": "USD",
+                "observed_at": timestamps.iloc[219],
+                "available_at": timestamps.iloc[219] + pd.Timedelta(minutes=1),
+                "revision_id": "fx-r1",
+                "rate": 1.1,
             }
         ]
     ).to_csv(path, index=False)
@@ -205,11 +223,51 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 5
+    assert evidence["schema_version"] == 6
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
     assert any("cash-dividend adjustments" in claim for claim in evidence["claims"])
+
+
+def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = dividend_actions_csv(tmp_path, source, currency="EUR")
+    rates = fx_rates_csv(tmp_path, source)
+    output = tmp_path / "fx-adjusted-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--symbol",
+                "ACME",
+                "--price-currency",
+                "USD",
+                "--fx-rates-csv",
+                str(rates),
+                "--max-fx-age-hours",
+                "24",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    snapshot = evidence["dataset"]["corporate_actions"]
+    assert snapshot["fx_source_name"] == "fx-vintages.csv"
+    assert snapshot["fx_max_age_seconds"] == 86_400.0
+    assert snapshot["fx_selected_observations"] == 1
+    assert len(snapshot["fx_lineage_sha256"]) == 64
+    assert any("FX revisions known" in claim for claim in evidence["claims"])
 
 
 @pytest.mark.parametrize(
@@ -219,6 +277,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
         ["--symbol", "ACME"],
         ["--corporate-actions-csv", "actions.csv", "--symbol", "ACME"],
         ["--price-currency", "USD"],
+        ["--fx-rates-csv", "fx.csv"],
     ],
 )
 def test_cli_requires_complete_point_in_time_action_configuration(arguments):

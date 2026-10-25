@@ -28,6 +28,13 @@ def _non_negative_float(value: str) -> float:
     return parsed
 
 
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be finite and positive")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Leakage-aware financial forecasting project")
     source = parser.add_mutually_exclusive_group()
@@ -51,6 +58,17 @@ def main(argv: list[str] | None = None) -> int:
         "--price-currency",
         help="uppercase ISO 4217 price currency; required when the feed contains dividends",
     )
+    parser.add_argument(
+        "--fx-rates-csv",
+        type=Path,
+        help="revision-bearing direct FX rates for foreign-currency dividends",
+    )
+    parser.add_argument(
+        "--max-fx-age-hours",
+        type=_positive_float,
+        default=168.0,
+        help="maximum FX observation age at the governed reference close (default: 168)",
+    )
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -66,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--corporate-actions-csv and --symbol must be supplied together")
     if args.price_currency is not None and args.corporate_actions_csv is None:
         parser.error("--price-currency requires --corporate-actions-csv")
+    if args.fx_rates_csv is not None and args.corporate_actions_csv is None:
+        parser.error("--fx-rates-csv requires --corporate-actions-csv")
     if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
         parser.error("corporate actions require --csv and --as-of")
 
@@ -93,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
                     as_of=args.as_of,
                     symbol=args.symbol,
                     price_currency=args.price_currency,
+                    fx_rates_path=args.fx_rates_csv,
+                    max_fx_age=f"{args.max_fx_age_hours} hours",
                 )
             except (TypeError, ValueError) as exc:
                 parser.error(str(exc))

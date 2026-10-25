@@ -8,7 +8,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 
 | Concern | Implementation | Failure guarded |
 |---|---|---|
-| Data ingestion | Ordered CSV validation, point-in-time price/split/dividend revision selection with SHA-256 lineage | Silent sorting, future revisions/actions and untraceable inputs |
+| Data ingestion | Ordered CSV validation, point-in-time price/action/FX revision selection with SHA-256 lineage | Silent sorting, future revisions/actions/rates and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
 | Label overlap | Horizon-aware purge contract | Training labels reaching into the test period |
 | Target contract | Immutable horizon/specification digest | Target construction drifting from the purge policy |
@@ -58,7 +58,7 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
-├── corporate_actions.py # point-in-time split/dividend selection and adjustment evidence
+├── corporate_actions.py # point-in-time split/dividend/FX selection and adjustment evidence
 ├── data.py         # validated CSV loading and normalized data identity
 ├── domain.py       # fold, interval and promotion domain records
 ├── evidence.py     # reproducible end-to-end verification artifact
@@ -136,14 +136,25 @@ finforecast \
   --corporate-actions-csv action-vintages.csv \
   --symbol ACME \
   --price-currency USD \
+  --fx-rates-csv fx-vintages.csv \
+  --max-fx-age-hours 168 \
   --evidence \
   --output artifacts/total-return-adjusted
 ```
 
 Core columns are `action_id,symbol,action_type,effective_at,available_at,revision_id`. Split rows add
-`split_ratio`; `cash_dividend` rows add `cash_amount,currency` and require a matching
+`split_ratio`; `cash_dividend` rows add `cash_amount,currency` and require
 `--price-currency`. Unused type-specific fields must be empty. Rows must be ordered by
 `(action_id, available_at)` and timestamps must carry explicit timezones.
+
+When a selected dividend currency differs from the price currency, `--fx-rates-csv` is mandatory.
+The revision-bearing FX feed contains
+`base_currency,quote_currency,observed_at,available_at,revision_id,rate`, where `rate` means one
+unit of base currency in quote currency. Only direct pairs from dividend currency to price currency
+are accepted; implicit inversion and triangulation are deliberately rejected. Rows are ordered by
+pair, observation time and availability. The latest revision known at `--as-of` is selected for
+each observation, then the latest observation at or before the dividend reference close is used.
+`--max-fx-age-hours` provides a fail-closed freshness budget.
 
 Only the latest revision known at the cutoff is selected; an announced but not-yet-effective action
 is committed to the snapshot but cannot adjust prices. For each effective split, earlier raw closes
@@ -151,16 +162,20 @@ are divided by the new-to-old share ratio and volumes are multiplied by it. For 
 the latest selected close strictly before the effective timestamp is the governed reference price:
 
 ```text
-factor = (reference_close - cash_amount) / reference_close
+converted_cash_amount = cash_amount * fx_rate  # foreign-currency dividends only
+factor = (reference_close - converted_cash_amount) / reference_close
 adjusted_historical_close = raw_historical_close * factor
 ```
 
-The cash amount, currency, reference timestamp/close and factor are committed to the selected-action
-digest; volume is unchanged. Multiple actions at exactly the same effective timestamp are rejected
-because their adjustment basis is ambiguous. Evidence also binds raw and adjusted market
+The original cash amount/currency, converted price-currency amount, selected FX rate and revision,
+reference timestamp/close and factor are committed to the selected-action digest; volume is
+unchanged. FX evidence separately binds the complete supplied rate lineage, cutoff selection counts,
+pair direction and freshness policy. Multiple actions at exactly the same effective timestamp are
+rejected because their adjustment basis is ambiguous. Evidence also binds raw and adjusted market
 fingerprints, complete revision lineage, and exclusion counts. The input must contain raw,
 unadjusted observations; this contract cannot detect a vendor that silently supplies adjusted
-prices or false availability timestamps.
+prices or false action/FX availability timestamps. It also does not model market calendars,
+cross-rate triangulation, withholding tax or execution spreads.
 
 ## Promotion policy
 

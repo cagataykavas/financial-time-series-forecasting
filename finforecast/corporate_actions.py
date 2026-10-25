@@ -31,6 +31,14 @@ class CorporateActionSnapshot:
     selected_actions: int
     applied_splits: int
     applied_cash_dividends: int
+    fx_source_name: str | None
+    fx_max_age_seconds: float | None
+    fx_raw_rows: int
+    fx_eligible_revisions: int
+    fx_selected_observations: int
+    fx_excluded_unavailable_revisions: int
+    fx_superseded_revisions: int
+    fx_lineage_sha256: str | None
     excluded_unavailable_revisions: int
     excluded_not_effective_actions: int
     superseded_revisions: int
@@ -50,6 +58,14 @@ class CorporateActionSnapshot:
             "selected_actions": self.selected_actions,
             "applied_splits": self.applied_splits,
             "applied_cash_dividends": self.applied_cash_dividends,
+            "fx_source_name": self.fx_source_name,
+            "fx_max_age_seconds": self.fx_max_age_seconds,
+            "fx_raw_rows": self.fx_raw_rows,
+            "fx_eligible_revisions": self.fx_eligible_revisions,
+            "fx_selected_observations": self.fx_selected_observations,
+            "fx_excluded_unavailable_revisions": self.fx_excluded_unavailable_revisions,
+            "fx_superseded_revisions": self.fx_superseded_revisions,
+            "fx_lineage_sha256": self.fx_lineage_sha256,
             "excluded_unavailable_revisions": self.excluded_unavailable_revisions,
             "excluded_not_effective_actions": self.excluded_not_effective_actions,
             "superseded_revisions": self.superseded_revisions,
@@ -106,6 +122,137 @@ def _optional_text(frame: pd.DataFrame, column: str) -> list[str | None]:
     return [None if pd.isna(value) or value == "" else value for value in frame[column]]
 
 
+@dataclass(frozen=True)
+class _FxRateBook:
+    source_name: str
+    selected: pd.DataFrame
+    raw_rows: int
+    eligible_revisions: int
+    excluded_unavailable_revisions: int
+    superseded_revisions: int
+    lineage_sha256: str
+
+    def resolve(
+        self,
+        base_currency: str,
+        quote_currency: str,
+        reference_at: pd.Timestamp,
+        max_age: pd.Timedelta,
+    ) -> pd.Series:
+        candidates = self.selected.loc[
+            (self.selected["base_currency"] == base_currency)
+            & (self.selected["quote_currency"] == quote_currency)
+            & (self.selected["observed_at"] <= reference_at)
+        ]
+        if candidates.empty:
+            raise ValueError(
+                "cash dividend requires a point-in-time FX observation at or before "
+                "its reference close"
+            )
+        resolved = candidates.sort_values("observed_at", kind="stable").iloc[-1]
+        if reference_at - resolved["observed_at"] > max_age:
+            raise ValueError("cash dividend FX observation exceeds the maximum age")
+        return resolved
+
+
+def _load_fx_rate_book(
+    path: str | Path,
+    *,
+    cutoff: pd.Timestamp,
+    required_pairs: set[tuple[str, str]],
+) -> _FxRateBook:
+    source = Path(path)
+    if not source.is_file():
+        raise ValueError(f"FX-rate CSV does not exist or is not a file: {source}")
+    try:
+        frame = pd.read_csv(source)
+    except (OSError, UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+        raise ValueError(f"cannot read FX-rate CSV: {exc}") from exc
+    required = {
+        "base_currency",
+        "quote_currency",
+        "observed_at",
+        "available_at",
+        "revision_id",
+        "rate",
+    }
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"FX-rate CSV is missing columns: {sorted(missing)}")
+    if frame.empty:
+        raise ValueError("FX-rate CSV cannot be empty")
+
+    bases = frame["base_currency"].tolist()
+    quotes = frame["quote_currency"].tolist()
+    if any(
+        not isinstance(value, str) or CURRENCY_RE.fullmatch(value) is None
+        for value in [*bases, *quotes]
+    ):
+        raise ValueError("FX currencies must be uppercase ISO 4217 codes")
+    pairs = set(zip(bases, quotes, strict=True))
+    if pairs != required_pairs:
+        raise ValueError("FX-rate CSV must contain exactly the required direct currency pairs")
+    revisions = _validate_identifiers(frame["revision_id"], "revision_id")
+    observed_at = _strict_utc_timestamps(frame["observed_at"], "observed_at")
+    available_at = _strict_utc_timestamps(frame["available_at"], "available_at")
+    observation_availability = zip(observed_at, available_at, strict=True)
+    if any(observed > available for observed, available in observation_availability):
+        raise ValueError("FX observations cannot be available before they were observed")
+    rates = pd.to_numeric(frame["rate"], errors="coerce").astype(float)
+    if any(not math.isfinite(rate) or rate <= 0 for rate in rates):
+        raise ValueError("FX rates must be finite and positive")
+
+    order = list(zip(bases, quotes, observed_at, available_at, strict=True))
+    if order != sorted(order):
+        raise ValueError("FX-rate rows must be ordered by pair, observation time and availability")
+    identity = pd.DataFrame(
+        {
+            "base_currency": bases,
+            "quote_currency": quotes,
+            "observed_at": observed_at,
+            "available_at": available_at,
+            "revision_id": revisions,
+            "rate": rates,
+        }
+    )
+    observation_key = ["base_currency", "quote_currency", "observed_at"]
+    if identity.duplicated([*observation_key, "available_at"]).any():
+        raise ValueError("FX revisions have ambiguous availability timestamps")
+    if identity.duplicated([*observation_key, "revision_id"]).any():
+        raise ValueError("FX revision IDs must be unique per observation")
+
+    eligible_mask = identity["available_at"] <= cutoff
+    eligible = identity.loc[eligible_mask].copy()
+    selected = eligible.groupby(observation_key, sort=False).tail(1)
+    lineage_rows = [
+        {
+            "base_currency": row.base_currency,
+            "quote_currency": row.quote_currency,
+            "observed_at": row.observed_at.isoformat(),
+            "available_at": row.available_at.isoformat(),
+            "revision_id": row.revision_id,
+            "rate": row.rate,
+        }
+        for row in identity.itertuples(index=False)
+    ]
+    return _FxRateBook(
+        source_name=source.name,
+        selected=selected,
+        raw_rows=len(identity),
+        eligible_revisions=len(eligible),
+        excluded_unavailable_revisions=int((~eligible_mask).sum()),
+        superseded_revisions=len(eligible) - len(selected),
+        lineage_sha256=_digest(
+            {
+                "schema_version": 1,
+                "as_of": cutoff.isoformat(),
+                "selection": "latest_available_revision_per_observed_pair",
+                "rows": lineage_rows,
+            }
+        ),
+    )
+
+
 def _apply_point_in_time_actions(
     market: MarketData,
     actions_path: str | Path,
@@ -113,6 +260,8 @@ def _apply_point_in_time_actions(
     as_of: object,
     symbol: str,
     price_currency: str | None,
+    fx_rates_path: str | Path | None,
+    max_fx_age: object,
     allowed_action_types: frozenset[str],
     action_id_column: str = "action_id",
     symbol_column: str = "symbol",
@@ -134,6 +283,12 @@ def _apply_point_in_time_actions(
         not isinstance(price_currency, str) or CURRENCY_RE.fullmatch(price_currency) is None
     ):
         raise ValueError("price_currency must be an uppercase ISO 4217 code")
+    try:
+        fx_age = pd.Timedelta(max_fx_age)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("max_fx_age must be a positive duration") from exc
+    if fx_age <= pd.Timedelta(0):
+        raise ValueError("max_fx_age must be a positive duration")
     cutoff = _utc_cutoff(as_of)
     if market.close.index.tz is None:
         raise ValueError("market observations must be timezone-aware")
@@ -216,8 +371,8 @@ def _apply_point_in_time_actions(
                 raise ValueError("cash dividend amounts must be finite and positive")
             if math.isfinite(ratio):
                 raise ValueError("cash dividend rows cannot declare a split ratio")
-            if currency != price_currency:
-                raise ValueError("cash dividend currency must match price_currency")
+            if not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None:
+                raise ValueError("cash dividend currency must be an uppercase ISO 4217 code")
 
     order = list(zip(action_ids, available_at, strict=True))
     if order != sorted(order):
@@ -249,6 +404,24 @@ def _apply_point_in_time_actions(
     applied = selected.loc[effective_mask].sort_values(["effective_at", "action_id"], kind="stable")
     if applied.duplicated(["effective_at"]).any():
         raise ValueError("multiple actions at the same effective timestamp are ambiguous")
+    required_fx_pairs = {
+        (row.currency, price_currency)
+        for row in applied.itertuples(index=False)
+        if row.action_type == "cash_dividend" and row.currency != price_currency
+    }
+    if required_fx_pairs and fx_rates_path is None:
+        raise ValueError("foreign-currency cash dividends require an FX-rate CSV")
+    if not required_fx_pairs and fx_rates_path is not None:
+        raise ValueError("FX-rate CSV is not allowed without a foreign-currency dividend")
+    fx_book = (
+        _load_fx_rate_book(
+            fx_rates_path,
+            cutoff=cutoff,
+            required_pairs=required_fx_pairs,
+        )
+        if fx_rates_path is not None
+        else None
+    )
 
     adjusted_close = market.close.copy(deep=True)
     adjusted_close.index = market_index
@@ -276,9 +449,25 @@ def _apply_point_in_time_actions(
                 raise ValueError("cash dividend requires a pre-effective market observation")
             reference_at = reference_positions[-1]
             reference_close = float(adjusted_close.loc[reference_at])
-            if row.cash_amount >= reference_close:
+            converted_cash_amount = row.cash_amount
+            fx_payload: dict[str, object] = {}
+            if row.currency != price_currency:
+                if fx_book is None:  # guarded above; retained as a fail-closed invariant
+                    raise ValueError("foreign-currency cash dividend has no FX-rate book")
+                fx = fx_book.resolve(row.currency, price_currency, reference_at, fx_age)
+                converted_cash_amount = row.cash_amount * fx["rate"]
+                fx_payload = {
+                    "fx_base_currency": fx["base_currency"],
+                    "fx_quote_currency": fx["quote_currency"],
+                    "fx_observed_at": fx["observed_at"].isoformat(),
+                    "fx_available_at": fx["available_at"].isoformat(),
+                    "fx_revision_id": fx["revision_id"],
+                    "fx_rate": fx["rate"],
+                    "converted_cash_amount": converted_cash_amount,
+                }
+            if converted_cash_amount >= reference_close:
                 raise ValueError("cash dividend must be smaller than its reference close")
-            factor = (reference_close - row.cash_amount) / reference_close
+            factor = (reference_close - converted_cash_amount) / reference_close
             adjusted_close.loc[historical] = adjusted_close.loc[historical] * factor
             payload.update(
                 {
@@ -287,6 +476,7 @@ def _apply_point_in_time_actions(
                     "reference_at": reference_at.isoformat(),
                     "reference_close": reference_close,
                     "back_adjustment_factor": factor,
+                    **fx_payload,
                 }
             )
         selected_payload.append(payload)
@@ -331,6 +521,16 @@ def _apply_point_in_time_actions(
         selected_actions=len(selected),
         applied_splits=int((applied["action_type"] == "split").sum()),
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
+        fx_source_name=fx_book.source_name if fx_book else None,
+        fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
+        fx_raw_rows=fx_book.raw_rows if fx_book else 0,
+        fx_eligible_revisions=fx_book.eligible_revisions if fx_book else 0,
+        fx_selected_observations=len(fx_book.selected) if fx_book else 0,
+        fx_excluded_unavailable_revisions=(
+            fx_book.excluded_unavailable_revisions if fx_book else 0
+        ),
+        fx_superseded_revisions=fx_book.superseded_revisions if fx_book else 0,
+        fx_lineage_sha256=fx_book.lineage_sha256 if fx_book else None,
         excluded_unavailable_revisions=int((~eligible_mask).sum()),
         excluded_not_effective_actions=int((~effective_mask).sum()),
         superseded_revisions=len(eligible) - len(selected),
@@ -339,10 +539,12 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
+                "fx_max_age_seconds": fx_age.total_seconds() if fx_book else None,
+                "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
                 "selection": "latest_available_revision_then_effective_action",
                 "rows": lineage_payload,
             }
@@ -365,8 +567,10 @@ def apply_point_in_time_corporate_actions(
     as_of: object,
     symbol: str,
     price_currency: str | None = None,
+    fx_rates_path: str | Path | None = None,
+    max_fx_age: object = "7 days",
 ) -> MarketData:
-    """Apply split and cash-dividend revisions known and effective at the cutoff."""
+    """Apply point-in-time splits and optionally FX-converted cash dividends."""
 
     return _apply_point_in_time_actions(
         market,
@@ -374,6 +578,8 @@ def apply_point_in_time_corporate_actions(
         as_of=as_of,
         symbol=symbol,
         price_currency=price_currency,
+        fx_rates_path=fx_rates_path,
+        max_fx_age=max_fx_age,
         allowed_action_types=SUPPORTED_ACTION_TYPES,
     )
 
@@ -393,5 +599,7 @@ def apply_point_in_time_splits(
         as_of=as_of,
         symbol=symbol,
         price_currency=None,
+        fx_rates_path=None,
+        max_fx_age="7 days",
         allowed_action_types=frozenset({"split"}),
     )
