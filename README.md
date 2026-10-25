@@ -8,7 +8,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 
 | Concern | Implementation | Failure guarded |
 |---|---|---|
-| Data ingestion | Ordered CSV validation, point-in-time price and split-revision selection with SHA-256 lineage | Silent sorting, future revisions/actions and untraceable inputs |
+| Data ingestion | Ordered CSV validation, point-in-time price/split/dividend revision selection with SHA-256 lineage | Silent sorting, future revisions/actions and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
 | Label overlap | Horizon-aware purge contract | Training labels reaching into the test period |
 | Target contract | Immutable horizon/specification digest | Target construction drifting from the purge policy |
@@ -58,7 +58,7 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
-├── corporate_actions.py # point-in-time split selection and adjustment evidence
+├── corporate_actions.py # point-in-time split/dividend selection and adjustment evidence
 ├── data.py         # validated CSV loading and normalized data identity
 ├── domain.py       # fold, interval and promotion domain records
 ├── evidence.py     # reproducible end-to-end verification artifact
@@ -123,29 +123,44 @@ revision from entering an earlier snapshot. It cannot establish that vendor avai
 are truthful; that remains a source-governance requirement. Custom column names use
 `--available-at-column` and `--revision-column`.
 
-### Point-in-time split adjustments
+### Point-in-time corporate-action adjustments
 
-Back-adjusted vendor histories can leak a split that was not yet known or effective at a historical
-evaluation cutoff. Supply a revision-bearing split feed together with the same `--as-of` value:
+Back-adjusted vendor histories can leak a split or cash dividend that was not yet known or effective
+at a historical evaluation cutoff. Supply a revision-bearing action feed together with the same
+`--as-of` value:
 
 ```bash
 finforecast \
   --csv price-vintages.csv \
   --as-of 2026-06-30T23:59:59Z \
-  --corporate-actions-csv split-vintages.csv \
+  --corporate-actions-csv action-vintages.csv \
   --symbol ACME \
+  --price-currency USD \
   --evidence \
-  --output artifacts/split-adjusted
+  --output artifacts/total-return-adjusted
 ```
 
-The split schema is `action_id,symbol,action_type,effective_at,available_at,revision_id,split_ratio`.
-Rows must be ordered by `(action_id, available_at)` and timestamps must carry explicit timezones.
+Core columns are `action_id,symbol,action_type,effective_at,available_at,revision_id`. Split rows add
+`split_ratio`; `cash_dividend` rows add `cash_amount,currency` and require a matching
+`--price-currency`. Unused type-specific fields must be empty. Rows must be ordered by
+`(action_id, available_at)` and timestamps must carry explicit timezones.
+
 Only the latest revision known at the cutoff is selected; an announced but not-yet-effective action
 is committed to the snapshot but cannot adjust prices. For each effective split, earlier raw closes
-are divided by the new-to-old share ratio and volumes are multiplied by it. Evidence binds the raw
-and adjusted market fingerprints, selected action digest, complete action lineage, and exclusion
-counts. The input must contain raw, unadjusted observations; this contract cannot detect a vendor
-that silently supplies already-adjusted prices or a false announcement timestamp.
+are divided by the new-to-old share ratio and volumes are multiplied by it. For a cash dividend,
+the latest selected close strictly before the effective timestamp is the governed reference price:
+
+```text
+factor = (reference_close - cash_amount) / reference_close
+adjusted_historical_close = raw_historical_close * factor
+```
+
+The cash amount, currency, reference timestamp/close and factor are committed to the selected-action
+digest; volume is unchanged. Multiple actions at exactly the same effective timestamp are rejected
+because their adjustment basis is ambiguous. Evidence also binds raw and adjusted market
+fingerprints, complete revision lineage, and exclusion counts. The input must contain raw,
+unadjusted observations; this contract cannot detect a vendor that silently supplies adjusted
+prices or false availability timestamps.
 
 ## Promotion policy
 
@@ -195,7 +210,7 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 This repository demonstrates evaluation and release engineering. It does **not** claim alpha,
 profitability or readiness for live capital. The CSV boundary validates structure, not economic
 correctness: the snapshot boundary enforces declared availability but cannot verify vendor claims.
-Production data still needs vendor guarantees, dividend and delisting treatment, market calendars,
+Production data still needs vendor guarantees, delisting treatment, market calendars,
 execution delay, slippage/impact, nested historical tuning
 and live coverage monitoring.
 

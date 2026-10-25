@@ -53,6 +53,28 @@ def split_actions_csv(tmp_path, market_path):
     return path
 
 
+def dividend_actions_csv(tmp_path, market_path):
+    frame = pd.read_csv(market_path)
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+    reference_close = float(frame.loc[219, "close"])
+    path = tmp_path / "dividend-vintages.csv"
+    pd.DataFrame(
+        [
+            {
+                "action_id": "dividend-1",
+                "symbol": "ACME",
+                "action_type": "cash_dividend",
+                "effective_at": timestamps.iloc[220],
+                "available_at": timestamps.iloc[180],
+                "revision_id": "vendor-r1",
+                "cash_amount": reference_close * 0.01,
+                "currency": "USD",
+            }
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
 def test_cli_runs_standard_evaluation_from_csv(tmp_path):
     output = tmp_path / "standard"
     assert main(["--csv", str(market_csv(tmp_path)), "--output", str(output)]) == 0
@@ -155,12 +177,48 @@ def test_cli_binds_point_in_time_split_snapshot_to_evidence(tmp_path):
     assert any("corporate-action revisions" in claim for claim in evidence["claims"])
 
 
+def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = dividend_actions_csv(tmp_path, source)
+    output = tmp_path / "dividend-adjusted-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--symbol",
+                "ACME",
+                "--price-currency",
+                "USD",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    snapshot = evidence["dataset"]["corporate_actions"]
+    assert evidence["schema_version"] == 5
+    assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
+    assert snapshot["applied_cash_dividends"] == 1
+    assert snapshot["price_currency"] == "USD"
+    assert any("cash-dividend adjustments" in claim for claim in evidence["claims"])
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
         ["--corporate-actions-csv", "actions.csv"],
         ["--symbol", "ACME"],
         ["--corporate-actions-csv", "actions.csv", "--symbol", "ACME"],
+        ["--price-currency", "USD"],
     ],
 )
 def test_cli_requires_complete_point_in_time_action_configuration(arguments):

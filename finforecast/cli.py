@@ -5,7 +5,7 @@ import json
 import math
 from pathlib import Path
 
-from .corporate_actions import apply_point_in_time_splits
+from .corporate_actions import apply_point_in_time_corporate_actions
 from .data import MarketData, load_market_csv
 from .engine import ForecastExperiment
 from .evidence import write_evidence
@@ -44,9 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--corporate-actions-csv",
         type=Path,
-        help="revision-bearing split feed applied at the --as-of cutoff",
+        help="revision-bearing split/dividend feed applied at the --as-of cutoff",
     )
     parser.add_argument("--symbol", help="stable uppercase symbol for corporate actions")
+    parser.add_argument(
+        "--price-currency",
+        help="uppercase ISO 4217 price currency; required when the feed contains dividends",
+    )
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -60,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if (args.corporate_actions_csv is None) != (args.symbol is None):
         parser.error("--corporate-actions-csv and --symbol must be supplied together")
+    if args.price_currency is not None and args.corporate_actions_csv is None:
+        parser.error("--price-currency requires --corporate-actions-csv")
     if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
         parser.error("corporate actions require --csv and --as-of")
 
@@ -81,11 +87,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("market CSV must contain at least 320 observations")
         if args.corporate_actions_csv is not None:
             try:
-                market = apply_point_in_time_splits(
+                market = apply_point_in_time_corporate_actions(
                     market,
                     args.corporate_actions_csv,
                     as_of=args.as_of,
                     symbol=args.symbol,
+                    price_currency=args.price_currency,
                 )
             except (TypeError, ValueError) as exc:
                 parser.error(str(exc))
