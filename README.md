@@ -137,6 +137,7 @@ finforecast \
   --symbol ACME \
   --price-currency USD \
   --fx-rates-csv fx-vintages.csv \
+  --fx-bridge-currency GBP \
   --max-fx-age-hours 168 \
   --evidence \
   --output artifacts/total-return-adjusted
@@ -150,11 +151,13 @@ Core columns are `action_id,symbol,action_type,effective_at,available_at,revisio
 When a selected dividend currency differs from the price currency, `--fx-rates-csv` is mandatory.
 The revision-bearing FX feed contains
 `base_currency,quote_currency,observed_at,available_at,revision_id,rate`, where `rate` means one
-unit of base currency in quote currency. Only direct pairs from dividend currency to price currency
-are accepted; implicit inversion and triangulation are deliberately rejected. Rows are ordered by
-pair, observation time and availability. The latest revision known at `--as-of` is selected for
-each observation, then the latest observation at or before the dividend reference close is used.
-`--max-fx-age-hours` provides a fail-closed freshness budget.
+unit of base currency in quote currency. Direct pairs are preferred. A directed two-leg route can
+be enabled only through an explicit, repeatable `--fx-bridge-currency`; implicit inversion and
+undeclared currencies remain rejected. Rows are ordered by pair, observation time and availability.
+The latest revision known at `--as-of` is selected for each observation, then each route leg uses
+the latest observation at or before the dividend reference close. `--max-fx-age-hours` applies to
+every leg independently. Multiple fresh bridge routes, incomplete routes and unused supplied pairs
+fail closed instead of silently choosing or accepting excess market data.
 
 Only the latest revision known at the cutoff is selected; an announced but not-yet-effective action
 is committed to the snapshot but cannot adjust prices. For each effective split, earlier raw closes
@@ -162,20 +165,21 @@ are divided by the new-to-old share ratio and volumes are multiplied by it. For 
 the latest selected close strictly before the effective timestamp is the governed reference price:
 
 ```text
-converted_cash_amount = cash_amount * fx_rate  # foreign-currency dividends only
+converted_cash_amount = cash_amount * product(route_leg_rates)  # foreign dividends only
 factor = (reference_close - converted_cash_amount) / reference_close
 adjusted_historical_close = raw_historical_close * factor
 ```
 
-The original cash amount/currency, converted price-currency amount, selected FX rate and revision,
+The original cash amount/currency, converted price-currency amount, selected FX route and revisions,
 reference timestamp/close and factor are committed to the selected-action digest; volume is
 unchanged. FX evidence separately binds the complete supplied rate lineage, cutoff selection counts,
-pair direction and freshness policy. Multiple actions at exactly the same effective timestamp are
-rejected because their adjustment basis is ambiguous. Evidence also binds raw and adjusted market
-fingerprints, complete revision lineage, and exclusion counts. The input must contain raw,
-unadjusted observations; this contract cannot detect a vendor that silently supplies adjusted
-prices or false action/FX availability timestamps. It also does not model market calendars,
-cross-rate triangulation, withholding tax or execution spreads.
+pair direction, declared bridge set and freshness policy. Multiple actions at exactly the same
+effective timestamp are rejected because their adjustment basis is ambiguous. Evidence also binds
+raw and adjusted market fingerprints, complete revision lineage, and exclusion counts. The input
+must contain raw, unadjusted observations; this contract cannot detect a vendor that silently
+supplies adjusted prices or false action/FX availability timestamps. It supports at most one
+explicitly declared two-leg directed route per conversion and does not model market calendars,
+implicit inversion, withholding tax or execution spreads.
 
 ## Promotion policy
 
