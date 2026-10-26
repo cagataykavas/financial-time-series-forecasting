@@ -93,6 +93,32 @@ def fx_rates_csv(tmp_path, market_path):
     return path
 
 
+def bridged_fx_rates_csv(tmp_path, market_path):
+    timestamps = pd.to_datetime(pd.read_csv(market_path)["timestamp"], utc=True)
+    path = tmp_path / "bridged-fx-vintages.csv"
+    pd.DataFrame(
+        [
+            {
+                "base_currency": "EUR",
+                "quote_currency": "GBP",
+                "observed_at": timestamps.iloc[219],
+                "available_at": timestamps.iloc[219] + pd.Timedelta(minutes=1),
+                "revision_id": "eur-gbp-r1",
+                "rate": 0.8,
+            },
+            {
+                "base_currency": "GBP",
+                "quote_currency": "USD",
+                "observed_at": timestamps.iloc[219],
+                "available_at": timestamps.iloc[219] + pd.Timedelta(minutes=1),
+                "revision_id": "gbp-usd-r1",
+                "rate": 1.25,
+            },
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
 def test_cli_runs_standard_evaluation_from_csv(tmp_path):
     output = tmp_path / "standard"
     assert main(["--csv", str(market_csv(tmp_path)), "--output", str(output)]) == 0
@@ -223,7 +249,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 6
+    assert evidence["schema_version"] == 7
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -270,6 +296,46 @@ def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):
     assert any("FX revisions known" in claim for claim in evidence["claims"])
 
 
+def test_cli_binds_declared_fx_bridge_route_to_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = dividend_actions_csv(tmp_path, source, currency="EUR")
+    rates = bridged_fx_rates_csv(tmp_path, source)
+    output = tmp_path / "bridged-fx-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--symbol",
+                "ACME",
+                "--price-currency",
+                "USD",
+                "--fx-rates-csv",
+                str(rates),
+                "--fx-bridge-currency",
+                "GBP",
+                "--max-fx-age-hours",
+                "24",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    snapshot = json.loads((output / "forecast_evidence.json").read_text())["dataset"][
+        "corporate_actions"
+    ]
+    assert snapshot["fx_bridge_currencies"] == ["GBP"]
+    assert snapshot["fx_routes"] == 1
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -278,6 +344,7 @@ def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):
         ["--corporate-actions-csv", "actions.csv", "--symbol", "ACME"],
         ["--price-currency", "USD"],
         ["--fx-rates-csv", "fx.csv"],
+        ["--fx-bridge-currency", "GBP"],
     ],
 )
 def test_cli_requires_complete_point_in_time_action_configuration(arguments):

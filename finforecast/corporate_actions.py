@@ -33,6 +33,8 @@ class CorporateActionSnapshot:
     applied_cash_dividends: int
     fx_source_name: str | None
     fx_max_age_seconds: float | None
+    fx_bridge_currencies: tuple[str, ...]
+    fx_routes: int
     fx_raw_rows: int
     fx_eligible_revisions: int
     fx_selected_observations: int
@@ -60,6 +62,8 @@ class CorporateActionSnapshot:
             "applied_cash_dividends": self.applied_cash_dividends,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
+            "fx_bridge_currencies": list(self.fx_bridge_currencies),
+            "fx_routes": self.fx_routes,
             "fx_raw_rows": self.fx_raw_rows,
             "fx_eligible_revisions": self.fx_eligible_revisions,
             "fx_selected_observations": self.fx_selected_observations,
@@ -131,6 +135,7 @@ class _FxRateBook:
     excluded_unavailable_revisions: int
     superseded_revisions: int
     lineage_sha256: str
+    supplied_pairs: frozenset[tuple[str, str]]
 
     def resolve(
         self,
@@ -138,28 +143,56 @@ class _FxRateBook:
         quote_currency: str,
         reference_at: pd.Timestamp,
         max_age: pd.Timedelta,
-    ) -> pd.Series:
-        candidates = self.selected.loc[
-            (self.selected["base_currency"] == base_currency)
-            & (self.selected["quote_currency"] == quote_currency)
-            & (self.selected["observed_at"] <= reference_at)
-        ]
-        if candidates.empty:
+        bridge_currencies: tuple[str, ...],
+    ) -> tuple[float, list[pd.Series]]:
+        def latest(base: str, quote: str) -> tuple[pd.Series | None, str | None]:
+            pair = self.selected.loc[
+                (self.selected["base_currency"] == base)
+                & (self.selected["quote_currency"] == quote)
+            ]
+            candidates = self.selected.loc[
+                (self.selected["base_currency"] == base)
+                & (self.selected["quote_currency"] == quote)
+                & (self.selected["observed_at"] <= reference_at)
+            ]
+            if candidates.empty:
+                return None, "future" if not pair.empty else "missing"
+            resolved = candidates.sort_values("observed_at", kind="stable").iloc[-1]
+            if reference_at - resolved["observed_at"] > max_age:
+                return None, "stale"
+            return resolved, None
+
+        direct, direct_error = latest(base_currency, quote_currency)
+        if direct is not None:
+            return float(direct["rate"]), [direct]
+        if not bridge_currencies:
+            if direct_error == "stale":
+                raise ValueError("cash dividend FX observation exceeds the maximum age")
             raise ValueError(
                 "cash dividend requires a point-in-time FX observation at or before "
                 "its reference close"
             )
-        resolved = candidates.sort_values("observed_at", kind="stable").iloc[-1]
-        if reference_at - resolved["observed_at"] > max_age:
-            raise ValueError("cash dividend FX observation exceeds the maximum age")
-        return resolved
+
+        routes: list[tuple[float, list[pd.Series]]] = []
+        for bridge in bridge_currencies:
+            first, _ = latest(base_currency, bridge)
+            second, _ = latest(bridge, quote_currency)
+            if first is not None and second is not None:
+                routes.append((float(first["rate"] * second["rate"]), [first, second]))
+        if len(routes) > 1:
+            raise ValueError("cash dividend FX conversion has ambiguous bridge routes")
+        if routes:
+            return routes[0]
+        raise ValueError(
+            "cash dividend requires a fresh point-in-time direct or declared bridge FX route"
+        )
 
 
 def _load_fx_rate_book(
     path: str | Path,
     *,
     cutoff: pd.Timestamp,
-    required_pairs: set[tuple[str, str]],
+    allowed_pairs: set[tuple[str, str]],
 ) -> _FxRateBook:
     source = Path(path)
     if not source.is_file():
@@ -190,8 +223,11 @@ def _load_fx_rate_book(
     ):
         raise ValueError("FX currencies must be uppercase ISO 4217 codes")
     pairs = set(zip(bases, quotes, strict=True))
-    if pairs != required_pairs:
-        raise ValueError("FX-rate CSV must contain exactly the required direct currency pairs")
+    if not pairs.issubset(allowed_pairs):
+        raise ValueError(
+            "FX-rate CSV contains a currency pair outside the declared FX routes; "
+            "only required direct currency pairs or declared bridge legs are allowed"
+        )
     revisions = _validate_identifiers(frame["revision_id"], "revision_id")
     observed_at = _strict_utc_timestamps(frame["observed_at"], "observed_at")
     available_at = _strict_utc_timestamps(frame["available_at"], "available_at")
@@ -250,6 +286,7 @@ def _load_fx_rate_book(
                 "rows": lineage_rows,
             }
         ),
+        supplied_pairs=frozenset(pairs),
     )
 
 
@@ -262,6 +299,7 @@ def _apply_point_in_time_actions(
     price_currency: str | None,
     fx_rates_path: str | Path | None,
     max_fx_age: object,
+    fx_bridge_currencies: tuple[str, ...],
     allowed_action_types: frozenset[str],
     action_id_column: str = "action_id",
     symbol_column: str = "symbol",
@@ -283,6 +321,16 @@ def _apply_point_in_time_actions(
         not isinstance(price_currency, str) or CURRENCY_RE.fullmatch(price_currency) is None
     ):
         raise ValueError("price_currency must be an uppercase ISO 4217 code")
+    if not isinstance(fx_bridge_currencies, tuple) or any(
+        not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None
+        for currency in fx_bridge_currencies
+    ):
+        raise ValueError("fx_bridge_currencies must contain uppercase ISO 4217 codes")
+    if len(set(fx_bridge_currencies)) != len(fx_bridge_currencies):
+        raise ValueError("fx_bridge_currencies must be unique")
+    fx_bridge_currencies = tuple(sorted(fx_bridge_currencies))
+    if price_currency in fx_bridge_currencies:
+        raise ValueError("price_currency cannot also be an FX bridge currency")
     try:
         fx_age = pd.Timedelta(max_fx_age)
     except (OverflowError, TypeError, ValueError) as exc:
@@ -409,6 +457,14 @@ def _apply_point_in_time_actions(
         for row in applied.itertuples(index=False)
         if row.action_type == "cash_dividend" and row.currency != price_currency
     }
+    dividend_currencies = {base for base, _ in required_fx_pairs}
+    if dividend_currencies.intersection(fx_bridge_currencies):
+        raise ValueError("a dividend currency cannot also be an FX bridge currency")
+    allowed_fx_pairs = set(required_fx_pairs)
+    for base, quote in required_fx_pairs:
+        for bridge in fx_bridge_currencies:
+            allowed_fx_pairs.add((base, bridge))
+            allowed_fx_pairs.add((bridge, quote))
     if required_fx_pairs and fx_rates_path is None:
         raise ValueError("foreign-currency cash dividends require an FX-rate CSV")
     if not required_fx_pairs and fx_rates_path is not None:
@@ -417,7 +473,7 @@ def _apply_point_in_time_actions(
         _load_fx_rate_book(
             fx_rates_path,
             cutoff=cutoff,
-            required_pairs=required_fx_pairs,
+            allowed_pairs=allowed_fx_pairs,
         )
         if fx_rates_path is not None
         else None
@@ -429,6 +485,8 @@ def _apply_point_in_time_actions(
     if adjusted_volume is not None:
         adjusted_volume.index = market_index
     selected_payload: list[dict[str, object]] = []
+    used_fx_pairs: set[tuple[str, str]] = set()
+    fx_routes = 0
     for row in applied.itertuples(index=False):
         historical = market_index < row.effective_at
         payload: dict[str, object] = {
@@ -454,15 +512,31 @@ def _apply_point_in_time_actions(
             if row.currency != price_currency:
                 if fx_book is None:  # guarded above; retained as a fail-closed invariant
                     raise ValueError("foreign-currency cash dividend has no FX-rate book")
-                fx = fx_book.resolve(row.currency, price_currency, reference_at, fx_age)
-                converted_cash_amount = row.cash_amount * fx["rate"]
+                fx_rate, fx_legs = fx_book.resolve(
+                    row.currency,
+                    price_currency,
+                    reference_at,
+                    fx_age,
+                    fx_bridge_currencies,
+                )
+                fx_routes += 1
+                used_fx_pairs.update(
+                    (leg["base_currency"], leg["quote_currency"]) for leg in fx_legs
+                )
+                converted_cash_amount = row.cash_amount * fx_rate
                 fx_payload = {
-                    "fx_base_currency": fx["base_currency"],
-                    "fx_quote_currency": fx["quote_currency"],
-                    "fx_observed_at": fx["observed_at"].isoformat(),
-                    "fx_available_at": fx["available_at"].isoformat(),
-                    "fx_revision_id": fx["revision_id"],
-                    "fx_rate": fx["rate"],
+                    "fx_rate": fx_rate,
+                    "fx_route": [
+                        {
+                            "base_currency": leg["base_currency"],
+                            "quote_currency": leg["quote_currency"],
+                            "observed_at": leg["observed_at"].isoformat(),
+                            "available_at": leg["available_at"].isoformat(),
+                            "revision_id": leg["revision_id"],
+                            "rate": leg["rate"],
+                        }
+                        for leg in fx_legs
+                    ],
                     "converted_cash_amount": converted_cash_amount,
                 }
             if converted_cash_amount >= reference_close:
@@ -480,6 +554,9 @@ def _apply_point_in_time_actions(
                 }
             )
         selected_payload.append(payload)
+
+    if fx_book is not None and fx_book.supplied_pairs != used_fx_pairs:
+        raise ValueError("FX-rate CSV contains unused or incomplete declared route pairs")
 
     adjusted_sha256 = _fingerprint(adjusted_close, adjusted_volume)
     lineage_payload: list[dict[str, object]] = []
@@ -523,6 +600,8 @@ def _apply_point_in_time_actions(
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
+        fx_bridge_currencies=fx_bridge_currencies if fx_book else (),
+        fx_routes=fx_routes,
         fx_raw_rows=fx_book.raw_rows if fx_book else 0,
         fx_eligible_revisions=fx_book.eligible_revisions if fx_book else 0,
         fx_selected_observations=len(fx_book.selected) if fx_book else 0,
@@ -539,11 +618,12 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
                 "fx_max_age_seconds": fx_age.total_seconds() if fx_book else None,
+                "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
                 "selection": "latest_available_revision_then_effective_action",
                 "rows": lineage_payload,
@@ -569,6 +649,7 @@ def apply_point_in_time_corporate_actions(
     price_currency: str | None = None,
     fx_rates_path: str | Path | None = None,
     max_fx_age: object = "7 days",
+    fx_bridge_currencies: tuple[str, ...] = (),
 ) -> MarketData:
     """Apply point-in-time splits and optionally FX-converted cash dividends."""
 
@@ -580,6 +661,7 @@ def apply_point_in_time_corporate_actions(
         price_currency=price_currency,
         fx_rates_path=fx_rates_path,
         max_fx_age=max_fx_age,
+        fx_bridge_currencies=fx_bridge_currencies,
         allowed_action_types=SUPPORTED_ACTION_TYPES,
     )
 
@@ -601,5 +683,6 @@ def apply_point_in_time_splits(
         price_currency=None,
         fx_rates_path=None,
         max_fx_age="7 days",
+        fx_bridge_currencies=(),
         allowed_action_types=frozenset({"split"}),
     )

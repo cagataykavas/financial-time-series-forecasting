@@ -69,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
         default=168.0,
         help="maximum FX observation age at the governed reference close (default: 168)",
     )
+    parser.add_argument(
+        "--fx-bridge-currency",
+        action="append",
+        default=[],
+        help="explicit directed two-leg FX bridge currency; repeatable",
+    )
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -86,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--price-currency requires --corporate-actions-csv")
     if args.fx_rates_csv is not None and args.corporate_actions_csv is None:
         parser.error("--fx-rates-csv requires --corporate-actions-csv")
+    if args.fx_bridge_currency and args.fx_rates_csv is None:
+        parser.error("--fx-bridge-currency requires --fx-rates-csv")
     if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
         parser.error("corporate actions require --csv and --as-of")
 
@@ -115,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                     price_currency=args.price_currency,
                     fx_rates_path=args.fx_rates_csv,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
+                    fx_bridge_currencies=tuple(args.fx_bridge_currency),
                 )
             except (TypeError, ValueError) as exc:
                 parser.error(str(exc))

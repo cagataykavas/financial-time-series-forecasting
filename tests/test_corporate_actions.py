@@ -266,6 +266,188 @@ def test_future_fx_revision_cannot_enter_historical_snapshot(tmp_path: Path):
     assert adjusted.corporate_actions.fx_superseded_revisions == 0
 
 
+def test_converts_foreign_dividend_through_declared_point_in_time_bridge(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "GBP",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "eur-gbp-r1",
+            "rate": 0.8,
+        },
+        {
+            "base_currency": "GBP",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-02T23:30:00Z",
+            "available_at": "2024-01-03T01:30:00Z",
+            "revision_id": "gbp-usd-r1",
+            "rate": 1.25,
+        },
+    ]
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        as_of="2024-01-06T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        fx_rates_path=fx_rates(tmp_path, rows),
+        max_fx_age="24 hours",
+        fx_bridge_currencies=("GBP",),
+    )
+
+    factor = (104.0 - (3.0 * 0.8 * 1.25)) / 104.0
+    assert adjusted.close.iloc[:2].tolist() == pytest.approx([100.0 * factor, 102.0 * factor])
+    snapshot = adjusted.corporate_actions
+    assert snapshot.fx_bridge_currencies == ("GBP",)
+    assert snapshot.fx_routes == 1
+    assert snapshot.metadata()["fx_bridge_currencies"] == ["GBP"]
+
+
+def test_direct_fx_route_takes_precedence_over_declared_bridge(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "direct-r1",
+            "rate": 1.1,
+        }
+    ]
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        as_of="2024-01-06T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        fx_rates_path=fx_rates(tmp_path, rows),
+        fx_bridge_currencies=("GBP",),
+    )
+
+    factor = (104.0 - (3.0 * 1.1)) / 104.0
+    assert adjusted.close.iloc[:2].tolist() == pytest.approx([100.0 * factor, 102.0 * factor])
+
+
+def test_multiple_fresh_bridge_routes_fail_closed(tmp_path: Path):
+    rows = []
+    for base, quote, rate in [
+        ("EUR", "GBP", 0.8),
+        ("EUR", "JPY", 160.0),
+        ("GBP", "USD", 1.25),
+        ("JPY", "USD", 0.00625),
+    ]:
+        rows.append(
+            {
+                "base_currency": base,
+                "quote_currency": quote,
+                "observed_at": "2024-01-03T00:00:00Z",
+                "available_at": "2024-01-03T01:00:00Z",
+                "revision_id": f"{base}-{quote}-r1",
+                "rate": rate,
+            }
+        )
+    rows.sort(key=lambda row: (row["base_currency"], row["quote_currency"]))
+
+    with pytest.raises(ValueError, match="ambiguous bridge routes"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path, rows),
+            fx_bridge_currencies=("GBP", "JPY"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("rows", "bridges", "message"),
+    [
+        (
+            [
+                {
+                    "base_currency": "EUR",
+                    "quote_currency": "CAD",
+                    "observed_at": "2024-01-03T00:00:00Z",
+                    "available_at": "2024-01-03T01:00:00Z",
+                    "revision_id": "undeclared-r1",
+                    "rate": 1.5,
+                }
+            ],
+            ("GBP",),
+            "outside the declared FX routes",
+        ),
+        (
+            [
+                {
+                    "base_currency": "EUR",
+                    "quote_currency": "GBP",
+                    "observed_at": "2024-01-01T00:00:00Z",
+                    "available_at": "2024-01-01T01:00:00Z",
+                    "revision_id": "stale-r1",
+                    "rate": 0.8,
+                },
+                {
+                    "base_currency": "GBP",
+                    "quote_currency": "USD",
+                    "observed_at": "2024-01-03T00:00:00Z",
+                    "available_at": "2024-01-03T01:00:00Z",
+                    "revision_id": "fresh-r1",
+                    "rate": 1.25,
+                },
+            ],
+            ("GBP",),
+            "fresh point-in-time",
+        ),
+    ],
+)
+def test_bridge_route_policy_fails_closed(tmp_path: Path, rows, bridges, message: str):
+    with pytest.raises(ValueError, match=message):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path, rows),
+            max_fx_age="24 hours",
+            fx_bridge_currencies=bridges,
+        )
+
+
+def test_unused_declared_fx_pair_fails_closed(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "GBP",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "unused-r1",
+            "rate": 0.8,
+        },
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "direct-r1",
+            "rate": 1.1,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="unused or incomplete"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path, rows),
+            fx_bridge_currencies=("GBP",),
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "max_age", "message"),
     [

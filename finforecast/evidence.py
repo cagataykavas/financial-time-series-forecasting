@@ -97,7 +97,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
