@@ -293,6 +293,7 @@ def test_converts_foreign_dividend_through_declared_point_in_time_bridge(tmp_pat
         price_currency="USD",
         fx_rates_path=fx_rates(tmp_path, rows),
         max_fx_age="24 hours",
+        max_fx_leg_skew="30 minutes",
         fx_bridge_currencies=("GBP",),
     )
 
@@ -301,7 +302,91 @@ def test_converts_foreign_dividend_through_declared_point_in_time_bridge(tmp_pat
     snapshot = adjusted.corporate_actions
     assert snapshot.fx_bridge_currencies == ("GBP",)
     assert snapshot.fx_routes == 1
+    assert snapshot.fx_max_leg_skew_seconds == 1_800.0
+    assert snapshot.fx_observed_max_leg_skew_seconds == 1_800.0
     assert snapshot.metadata()["fx_bridge_currencies"] == ["GBP"]
+
+
+def test_bridge_route_rejects_fresh_but_asynchronous_legs(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "GBP",
+            "observed_at": "2024-01-02T04:00:00Z",
+            "available_at": "2024-01-02T05:00:00Z",
+            "revision_id": "eur-gbp-r1",
+            "rate": 0.8,
+        },
+        {
+            "base_currency": "GBP",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "gbp-usd-r1",
+            "rate": 1.25,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="maximum timestamp skew"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path, rows),
+            max_fx_age="24 hours",
+            max_fx_leg_skew="1 hour",
+            fx_bridge_currencies=("GBP",),
+        )
+
+
+def test_fx_leg_skew_policy_changes_lineage_without_changing_prices(tmp_path: Path):
+    rows = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "GBP",
+            "observed_at": "2024-01-03T00:00:00Z",
+            "available_at": "2024-01-03T01:00:00Z",
+            "revision_id": "eur-gbp-r1",
+            "rate": 0.8,
+        },
+        {
+            "base_currency": "GBP",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-02T23:30:00Z",
+            "available_at": "2024-01-03T01:30:00Z",
+            "revision_id": "gbp-usd-r1",
+            "rate": 1.25,
+        },
+    ]
+    common = {
+        "as_of": "2024-01-06T00:00:00Z",
+        "symbol": "ACME",
+        "price_currency": "USD",
+        "fx_rates_path": fx_rates(tmp_path, rows),
+        "max_fx_age": "24 hours",
+        "fx_bridge_currencies": ("GBP",),
+    }
+
+    strict = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        max_fx_leg_skew="30 minutes",
+        **common,
+    )
+    relaxed = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, foreign_dividend_rows()),
+        max_fx_leg_skew="2 hours",
+        **common,
+    )
+
+    assert strict.close.equals(relaxed.close)
+    assert strict.corporate_actions.selected_actions_sha256 == (
+        relaxed.corporate_actions.selected_actions_sha256
+    )
+    assert strict.corporate_actions.lineage_sha256 != relaxed.corporate_actions.lineage_sha256
 
 
 def test_direct_fx_route_takes_precedence_over_declared_bridge(tmp_path: Path):
@@ -507,6 +592,20 @@ def test_fx_input_is_rejected_when_no_foreign_dividend_is_applied(tmp_path: Path
             symbol="ACME",
             price_currency="USD",
             fx_rates_path=fx_rates(tmp_path),
+        )
+
+
+@pytest.mark.parametrize("value", [0, "-1 hour", "NaT"])
+def test_invalid_fx_leg_skew_policy_fails_closed(tmp_path: Path, value):
+    with pytest.raises(ValueError, match="max_fx_leg_skew must be a positive duration"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, foreign_dividend_rows()),
+            as_of="2024-01-06T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+            fx_rates_path=fx_rates(tmp_path),
+            max_fx_leg_skew=value,
         )
 
 

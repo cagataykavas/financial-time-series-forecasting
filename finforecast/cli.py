@@ -70,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         help="maximum FX observation age at the governed reference close (default: 168)",
     )
     parser.add_argument(
+        "--max-fx-leg-skew-hours",
+        type=_positive_float,
+        default=1.0,
+        help="maximum observation-time skew between two FX route legs (default: 1)",
+    )
+    parser.add_argument(
         "--fx-bridge-currency",
         action="append",
         default=[],
@@ -123,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
                     price_currency=args.price_currency,
                     fx_rates_path=args.fx_rates_csv,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
+                    max_fx_leg_skew=f"{args.max_fx_leg_skew_hours} hours",
                     fx_bridge_currencies=tuple(args.fx_bridge_currency),
                 )
             except (TypeError, ValueError) as exc:

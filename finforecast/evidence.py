@@ -84,7 +84,7 @@ def _build_evidence(
         if action_snapshot["fx_source_name"]:
             snapshot_claims.append(
                 "Foreign-currency dividends use only FX revisions known at the cutoff, "
-                "subject to the declared observation-age budget."
+                "subject to the declared observation-age and route-leg synchronization budgets."
             )
         if action_snapshot["applied_cash_dividends"]:
             snapshot_claims.append(
@@ -97,7 +97,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 7,
+        "schema_version": 8,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
