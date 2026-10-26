@@ -139,6 +139,7 @@ finforecast \
   --fx-rates-csv fx-vintages.csv \
   --fx-bridge-currency GBP \
   --max-fx-age-hours 168 \
+  --max-fx-leg-skew-hours 1 \
   --evidence \
   --output artifacts/total-return-adjusted
 ```
@@ -156,8 +157,10 @@ be enabled only through an explicit, repeatable `--fx-bridge-currency`; implicit
 undeclared currencies remain rejected. Rows are ordered by pair, observation time and availability.
 The latest revision known at `--as-of` is selected for each observation, then each route leg uses
 the latest observation at or before the dividend reference close. `--max-fx-age-hours` applies to
-every leg independently. Multiple fresh bridge routes, incomplete routes and unused supplied pairs
-fail closed instead of silently choosing or accepting excess market data.
+every leg independently. For a two-leg route, `--max-fx-leg-skew-hours` also limits the difference
+between leg observation timestamps, preventing individually fresh but asynchronous quotes from being
+combined. Multiple fresh bridge routes, excessive timestamp skew, incomplete routes and unused
+supplied pairs fail closed instead of silently choosing or accepting excess market data.
 
 Only the latest revision known at the cutoff is selected; an announced but not-yet-effective action
 is committed to the snapshot but cannot adjust prices. For each effective split, earlier raw closes
@@ -173,13 +176,15 @@ adjusted_historical_close = raw_historical_close * factor
 The original cash amount/currency, converted price-currency amount, selected FX route and revisions,
 reference timestamp/close and factor are committed to the selected-action digest; volume is
 unchanged. FX evidence separately binds the complete supplied rate lineage, cutoff selection counts,
-pair direction, declared bridge set and freshness policy. Multiple actions at exactly the same
-effective timestamp are rejected because their adjustment basis is ambiguous. Evidence also binds
-raw and adjusted market fingerprints, complete revision lineage, and exclusion counts. The input
-must contain raw, unadjusted observations; this contract cannot detect a vendor that silently
-supplies adjusted prices or false action/FX availability timestamps. It supports at most one
-explicitly declared two-leg directed route per conversion and does not model market calendars,
-implicit inversion, withholding tax or execution spreads.
+pair direction, declared bridge set, per-route observed skew, freshness policy and synchronization
+budget. Multiple actions at exactly the same effective timestamp are rejected because their
+adjustment basis is ambiguous. Evidence also binds raw and adjusted market fingerprints, complete
+revision lineage, and exclusion counts. The input must contain raw, unadjusted observations; this
+contract cannot detect a vendor that silently supplies adjusted prices or false action/FX
+availability timestamps. It supports at most one explicitly declared two-leg directed route per
+conversion and does not model market calendars, implicit inversion, withholding tax or execution
+spreads. Timestamp proximity reduces asynchronous-quote risk but does not prove that the two markets
+were simultaneously liquid.
 
 ## Promotion policy
 

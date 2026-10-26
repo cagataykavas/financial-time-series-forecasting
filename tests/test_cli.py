@@ -109,7 +109,7 @@ def bridged_fx_rates_csv(tmp_path, market_path):
             {
                 "base_currency": "GBP",
                 "quote_currency": "USD",
-                "observed_at": timestamps.iloc[219],
+                "observed_at": timestamps.iloc[219] - pd.Timedelta(minutes=15),
                 "available_at": timestamps.iloc[219] + pd.Timedelta(minutes=1),
                 "revision_id": "gbp-usd-r1",
                 "rate": 1.25,
@@ -249,7 +249,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 7
+    assert evidence["schema_version"] == 8
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -321,6 +321,8 @@ def test_cli_binds_declared_fx_bridge_route_to_evidence(tmp_path):
                 "GBP",
                 "--max-fx-age-hours",
                 "24",
+                "--max-fx-leg-skew-hours",
+                "0.5",
                 "--evidence",
                 "--output",
                 str(output),
@@ -334,6 +336,8 @@ def test_cli_binds_declared_fx_bridge_route_to_evidence(tmp_path):
     ]
     assert snapshot["fx_bridge_currencies"] == ["GBP"]
     assert snapshot["fx_routes"] == 1
+    assert snapshot["fx_max_leg_skew_seconds"] == 1_800.0
+    assert snapshot["fx_observed_max_leg_skew_seconds"] == 900.0
 
 
 @pytest.mark.parametrize(

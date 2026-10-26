@@ -33,6 +33,8 @@ class CorporateActionSnapshot:
     applied_cash_dividends: int
     fx_source_name: str | None
     fx_max_age_seconds: float | None
+    fx_max_leg_skew_seconds: float | None
+    fx_observed_max_leg_skew_seconds: float | None
     fx_bridge_currencies: tuple[str, ...]
     fx_routes: int
     fx_raw_rows: int
@@ -62,6 +64,8 @@ class CorporateActionSnapshot:
             "applied_cash_dividends": self.applied_cash_dividends,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
+            "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
+            "fx_observed_max_leg_skew_seconds": self.fx_observed_max_leg_skew_seconds,
             "fx_bridge_currencies": list(self.fx_bridge_currencies),
             "fx_routes": self.fx_routes,
             "fx_raw_rows": self.fx_raw_rows,
@@ -126,6 +130,16 @@ def _optional_text(frame: pd.DataFrame, column: str) -> list[str | None]:
     return [None if pd.isna(value) or value == "" else value for value in frame[column]]
 
 
+def _positive_duration(value: object, name: str) -> pd.Timedelta:
+    try:
+        duration = pd.Timedelta(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive duration") from exc
+    if pd.isna(duration) or duration <= pd.Timedelta(0):
+        raise ValueError(f"{name} must be a positive duration")
+    return duration
+
+
 @dataclass(frozen=True)
 class _FxRateBook:
     source_name: str
@@ -143,8 +157,9 @@ class _FxRateBook:
         quote_currency: str,
         reference_at: pd.Timestamp,
         max_age: pd.Timedelta,
+        max_leg_skew: pd.Timedelta,
         bridge_currencies: tuple[str, ...],
-    ) -> tuple[float, list[pd.Series]]:
+    ) -> tuple[float, list[pd.Series], float]:
         def latest(base: str, quote: str) -> tuple[pd.Series | None, str | None]:
             pair = self.selected.loc[
                 (self.selected["base_currency"] == base)
@@ -164,7 +179,7 @@ class _FxRateBook:
 
         direct, direct_error = latest(base_currency, quote_currency)
         if direct is not None:
-            return float(direct["rate"]), [direct]
+            return float(direct["rate"]), [direct], 0.0
         if not bridge_currencies:
             if direct_error == "stale":
                 raise ValueError("cash dividend FX observation exceeds the maximum age")
@@ -182,7 +197,11 @@ class _FxRateBook:
         if len(routes) > 1:
             raise ValueError("cash dividend FX conversion has ambiguous bridge routes")
         if routes:
-            return routes[0]
+            rate, legs = routes[0]
+            leg_skew = abs(legs[0]["observed_at"] - legs[1]["observed_at"])
+            if leg_skew > max_leg_skew:
+                raise ValueError("cash dividend FX route legs exceed the maximum timestamp skew")
+            return rate, legs, leg_skew.total_seconds()
         raise ValueError(
             "cash dividend requires a fresh point-in-time direct or declared bridge FX route"
         )
@@ -299,6 +318,7 @@ def _apply_point_in_time_actions(
     price_currency: str | None,
     fx_rates_path: str | Path | None,
     max_fx_age: object,
+    max_fx_leg_skew: object,
     fx_bridge_currencies: tuple[str, ...],
     allowed_action_types: frozenset[str],
     action_id_column: str = "action_id",
@@ -331,12 +351,8 @@ def _apply_point_in_time_actions(
     fx_bridge_currencies = tuple(sorted(fx_bridge_currencies))
     if price_currency in fx_bridge_currencies:
         raise ValueError("price_currency cannot also be an FX bridge currency")
-    try:
-        fx_age = pd.Timedelta(max_fx_age)
-    except (OverflowError, TypeError, ValueError) as exc:
-        raise ValueError("max_fx_age must be a positive duration") from exc
-    if fx_age <= pd.Timedelta(0):
-        raise ValueError("max_fx_age must be a positive duration")
+    fx_age = _positive_duration(max_fx_age, "max_fx_age")
+    fx_leg_skew = _positive_duration(max_fx_leg_skew, "max_fx_leg_skew")
     cutoff = _utc_cutoff(as_of)
     if market.close.index.tz is None:
         raise ValueError("market observations must be timezone-aware")
@@ -487,6 +503,7 @@ def _apply_point_in_time_actions(
     selected_payload: list[dict[str, object]] = []
     used_fx_pairs: set[tuple[str, str]] = set()
     fx_routes = 0
+    observed_leg_skews: list[float] = []
     for row in applied.itertuples(index=False):
         historical = market_index < row.effective_at
         payload: dict[str, object] = {
@@ -512,20 +529,23 @@ def _apply_point_in_time_actions(
             if row.currency != price_currency:
                 if fx_book is None:  # guarded above; retained as a fail-closed invariant
                     raise ValueError("foreign-currency cash dividend has no FX-rate book")
-                fx_rate, fx_legs = fx_book.resolve(
+                fx_rate, fx_legs, observed_leg_skew = fx_book.resolve(
                     row.currency,
                     price_currency,
                     reference_at,
                     fx_age,
+                    fx_leg_skew,
                     fx_bridge_currencies,
                 )
                 fx_routes += 1
+                observed_leg_skews.append(observed_leg_skew)
                 used_fx_pairs.update(
                     (leg["base_currency"], leg["quote_currency"]) for leg in fx_legs
                 )
                 converted_cash_amount = row.cash_amount * fx_rate
                 fx_payload = {
                     "fx_rate": fx_rate,
+                    "fx_leg_skew_seconds": observed_leg_skew,
                     "fx_route": [
                         {
                             "base_currency": leg["base_currency"],
@@ -600,6 +620,8 @@ def _apply_point_in_time_actions(
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
+        fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
+        fx_observed_max_leg_skew_seconds=max(observed_leg_skews) if fx_book else None,
         fx_bridge_currencies=fx_bridge_currencies if fx_book else (),
         fx_routes=fx_routes,
         fx_raw_rows=fx_book.raw_rows if fx_book else 0,
@@ -618,11 +640,12 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 4,
+                "schema_version": 5,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
                 "fx_max_age_seconds": fx_age.total_seconds() if fx_book else None,
+                "fx_max_leg_skew_seconds": fx_leg_skew.total_seconds() if fx_book else None,
                 "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
                 "selection": "latest_available_revision_then_effective_action",
@@ -649,6 +672,7 @@ def apply_point_in_time_corporate_actions(
     price_currency: str | None = None,
     fx_rates_path: str | Path | None = None,
     max_fx_age: object = "7 days",
+    max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
 ) -> MarketData:
     """Apply point-in-time splits and optionally FX-converted cash dividends."""
@@ -661,6 +685,7 @@ def apply_point_in_time_corporate_actions(
         price_currency=price_currency,
         fx_rates_path=fx_rates_path,
         max_fx_age=max_fx_age,
+        max_fx_leg_skew=max_fx_leg_skew,
         fx_bridge_currencies=fx_bridge_currencies,
         allowed_action_types=SUPPORTED_ACTION_TYPES,
     )
@@ -683,6 +708,7 @@ def apply_point_in_time_splits(
         price_currency=None,
         fx_rates_path=None,
         max_fx_age="7 days",
+        max_fx_leg_skew="1 hour",
         fx_bridge_currencies=(),
         allowed_action_types=frozenset({"split"}),
     )
