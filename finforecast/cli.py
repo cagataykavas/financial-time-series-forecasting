@@ -163,7 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         close, volume_values = market.close, market.volume
         dataset_metadata = market.metadata()
-    data = make_supervised_features(close, volume_values)
+    action_snapshot = dataset_metadata.get("corporate_actions", {})
+    data = make_supervised_features(
+        close,
+        volume_values,
+        allow_terminal_zero=bool(action_snapshot.get("terminal_zero_recovery", False)),
+    )
     experiment = ForecastExperiment(seed=args.seed)
     predictions = experiment.walk_forward(data)
     result = experiment.evaluate(predictions, args.cost_bps)

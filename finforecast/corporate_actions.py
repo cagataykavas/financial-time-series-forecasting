@@ -33,6 +33,7 @@ class CorporateActionSnapshot:
     applied_splits: int
     applied_cash_dividends: int
     applied_cash_delistings: int
+    terminal_zero_recovery: bool
     fx_source_name: str | None
     fx_max_age_seconds: float | None
     fx_max_leg_skew_seconds: float | None
@@ -65,6 +66,7 @@ class CorporateActionSnapshot:
             "applied_splits": self.applied_splits,
             "applied_cash_dividends": self.applied_cash_dividends,
             "applied_cash_delistings": self.applied_cash_delistings,
+            "terminal_zero_recovery": self.terminal_zero_recovery,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
             "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
@@ -434,8 +436,14 @@ def _apply_point_in_time_actions(
             if math.isfinite(cash_amount) or currency is not None:
                 raise ValueError("split rows cannot declare cash dividend fields")
         elif action_type in CASH_ACTION_TYPES:
-            if not math.isfinite(cash_amount) or cash_amount <= 0:
-                raise ValueError("cash action amounts must be finite and positive")
+            if action_type == "cash_dividend" and (
+                not math.isfinite(cash_amount) or cash_amount <= 0
+            ):
+                raise ValueError("cash dividend amounts must be finite and positive")
+            if action_type == "cash_delisting" and (
+                not math.isfinite(cash_amount) or cash_amount < 0
+            ):
+                raise ValueError("cash delisting amounts must be finite and non-negative")
             if math.isfinite(ratio):
                 raise ValueError("cash action rows cannot declare a split ratio")
             if not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None:
@@ -481,7 +489,11 @@ def _apply_point_in_time_actions(
     required_fx_pairs = {
         (row.currency, price_currency)
         for row in applied.itertuples(index=False)
-        if row.action_type in CASH_ACTION_TYPES and row.currency != price_currency
+        if (
+            row.action_type in CASH_ACTION_TYPES
+            and row.cash_amount > 0
+            and row.currency != price_currency
+        )
     }
     cash_currencies = {base for base, _ in required_fx_pairs}
     if cash_currencies.intersection(fx_bridge_currencies):
@@ -536,7 +548,7 @@ def _apply_point_in_time_actions(
             reference_close = float(adjusted_close.loc[reference_at])
             converted_cash_amount = row.cash_amount
             fx_payload: dict[str, object] = {}
-            if row.currency != price_currency:
+            if row.cash_amount > 0 and row.currency != price_currency:
                 if fx_book is None:  # guarded above; retained as a fail-closed invariant
                     raise ValueError("foreign-currency cash action has no FX-rate book")
                 fx_reference_at = (
@@ -647,6 +659,9 @@ def _apply_point_in_time_actions(
         applied_splits=int((applied["action_type"] == "split").sum()),
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
         applied_cash_delistings=int((applied["action_type"] == "cash_delisting").sum()),
+        terminal_zero_recovery=bool(
+            not cash_delistings.empty and cash_delistings.iloc[0]["cash_amount"] == 0
+        ),
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
         fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
@@ -669,7 +684,7 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 6,
+                "schema_version": 7,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,

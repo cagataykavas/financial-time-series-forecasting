@@ -53,6 +53,7 @@ def make_supervised_features(
     volume: pd.Series | None = None,
     *,
     target_spec: ForecastTargetSpec | None = None,
+    allow_terminal_zero: bool = False,
 ) -> pd.DataFrame:
     """Create features using only information available before the prediction timestamp."""
     spec = target_spec or ForecastTargetSpec()
@@ -62,8 +63,17 @@ def make_supervised_features(
         raise ValueError("close must contain observations")
     if not close.index.is_unique or not close.index.is_monotonic_increasing:
         raise ValueError("close must have a unique, increasing time index")
+    if not isinstance(allow_terminal_zero, bool):
+        raise TypeError("allow_terminal_zero must be a boolean")
     close = close.astype(float)
-    if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
+    if not np.isfinite(close.to_numpy()).all() or (close < 0).any():
+        raise ValueError("close values must be finite and strictly positive")
+    zero_positions = close == 0
+    if zero_positions.any() and (
+        not allow_terminal_zero
+        or int(zero_positions.sum()) != 1
+        or not bool(zero_positions.iloc[-1])
+    ):
         raise ValueError("close values must be finite and strictly positive")
 
     returns = close.pct_change()

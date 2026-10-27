@@ -30,6 +30,22 @@ def test_features_reject_malformed_market_series():
         make_supervised_features(prices(), prices().iloc[:-1])
 
 
+def test_features_admit_only_an_explicit_terminal_zero_recovery():
+    close = prices()
+    close.iloc[-1] = 0.0
+
+    result = make_supervised_features(close, allow_terminal_zero=True)
+
+    assert result.index[-1] == close.index[-2]
+    assert result.iloc[-1]["target_next_return"] == -1.0
+    with pytest.raises(ValueError, match="strictly positive"):
+        make_supervised_features(close)
+    early_zero = prices()
+    early_zero.iloc[3] = 0.0
+    with pytest.raises(ValueError, match="strictly positive"):
+        make_supervised_features(early_zero, allow_terminal_zero=True)
+
+
 def test_features_require_enough_history_for_rolling_windows():
     with pytest.raises(ValueError, match="not enough"):
         make_supervised_features(prices(20))

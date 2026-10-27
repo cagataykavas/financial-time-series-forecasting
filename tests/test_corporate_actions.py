@@ -250,10 +250,44 @@ def test_cash_delisting_adds_point_in_time_terminal_payout(tmp_path: Path):
     assert adjusted.volume.iloc[-1] == 0.0
     snapshot = adjusted.corporate_actions
     assert snapshot.applied_cash_delistings == 1
+    assert snapshot.terminal_zero_recovery is False
     assert snapshot.applied_cash_dividends == 0
     assert snapshot.superseded_revisions == 1
     assert adjusted.metadata()["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot.unadjusted_market_sha256 != snapshot.adjusted_market_sha256
+
+
+def test_cash_delisting_can_bind_explicit_zero_recovery_without_fx(tmp_path: Path):
+    rows = delisting_rows("EUR")
+    rows[1]["cash_amount"] = 0.0
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, rows),
+        as_of="2024-01-07T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+    )
+
+    assert adjusted.close.iloc[-1] == 0.0
+    assert adjusted.volume.iloc[-1] == 0.0
+    snapshot = adjusted.corporate_actions
+    assert snapshot.terminal_zero_recovery is True
+    assert snapshot.fx_routes == 0
+    assert snapshot.fx_source_name is None
+
+
+def test_cash_delisting_rejects_negative_recovery(tmp_path: Path):
+    rows = delisting_rows()
+    rows[1]["cash_amount"] = -0.01
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, rows),
+            as_of="2024-01-07T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+        )
 
 
 def test_future_delisting_revision_cannot_rewrite_terminal_payout(tmp_path: Path):
