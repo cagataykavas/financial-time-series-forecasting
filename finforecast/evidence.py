@@ -83,12 +83,22 @@ def _build_evidence(
         action_snapshot = dataset["corporate_actions"]
         if action_snapshot["fx_source_name"]:
             snapshot_claims.append(
-                "Foreign-currency dividends use only FX revisions known at the cutoff, "
+                "Foreign-currency cash actions use only FX revisions known at the cutoff, "
                 "subject to the declared observation-age and route-leg synchronization budgets."
+            )
+        if action_snapshot["applied_cash_delistings"]:
+            snapshot_claims.append(
+                "Cash-delisting terminal observations use only payout revisions known and "
+                "effective at the cutoff."
             )
         if action_snapshot["applied_cash_dividends"]:
             snapshot_claims.append(
                 "Split and cash-dividend adjustments use only corporate-action revisions "
+                "known and effective at the cutoff."
+            )
+        elif action_snapshot["applied_cash_delistings"]:
+            snapshot_claims.append(
+                "Cash-delisting terminal construction uses only corporate-action revisions "
                 "known and effective at the cutoff."
             )
         else:
@@ -97,7 +107,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 8,
+        "schema_version": 9,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

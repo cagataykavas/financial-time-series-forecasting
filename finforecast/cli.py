@@ -51,17 +51,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--corporate-actions-csv",
         type=Path,
-        help="revision-bearing split/dividend feed applied at the --as-of cutoff",
+        help="revision-bearing split/dividend/cash-delisting feed applied at the --as-of cutoff",
     )
     parser.add_argument("--symbol", help="stable uppercase symbol for corporate actions")
     parser.add_argument(
         "--price-currency",
-        help="uppercase ISO 4217 price currency; required when the feed contains dividends",
+        help="uppercase ISO 4217 price currency; required when the feed contains cash actions",
     )
     parser.add_argument(
         "--fx-rates-csv",
         type=Path,
-        help="revision-bearing direct FX rates for foreign-currency dividends",
+        help="revision-bearing direct FX rates for foreign-currency cash actions",
     )
     parser.add_argument(
         "--max-fx-age-hours",
