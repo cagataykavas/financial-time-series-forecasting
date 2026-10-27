@@ -58,11 +58,19 @@ class MarketData:
     corporate_actions: CorporateActionSnapshot | None = None
 
     def metadata(self) -> dict[str, Any]:
+        synthetic_terminal_observations = (
+            self.corporate_actions.applied_cash_delistings
+            if self.corporate_actions is not None
+            else 0
+        )
         metadata = {
             "kind": (
                 (
                     "point_in_time_total_return_adjusted_market"
-                    if self.corporate_actions.applied_cash_dividends
+                    if (
+                        self.corporate_actions.applied_cash_dividends
+                        or self.corporate_actions.applied_cash_delistings
+                    )
                     else "point_in_time_split_adjusted_market"
                 )
                 if self.corporate_actions is not None
@@ -74,7 +82,8 @@ class MarketData:
             ),
             "source_name": self.source_name,
             "sha256": self.sha256,
-            "raw_observations": len(self.close),
+            "raw_observations": len(self.close) - synthetic_terminal_observations,
+            "adjusted_observations": len(self.close),
             "start": self.close.index[0].isoformat(),
             "end": self.close.index[-1].isoformat(),
             "has_volume": self.volume is not None,

@@ -58,7 +58,7 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
-├── corporate_actions.py # point-in-time split/dividend/FX selection and adjustment evidence
+├── corporate_actions.py # point-in-time split/dividend/delisting/FX evidence
 ├── data.py         # validated CSV loading and normalized data identity
 ├── domain.py       # fold, interval and promotion domain records
 ├── evidence.py     # reproducible end-to-end verification artifact
@@ -125,9 +125,9 @@ are truthful; that remains a source-governance requirement. Custom column names 
 
 ### Point-in-time corporate-action adjustments
 
-Back-adjusted vendor histories can leak a split or cash dividend that was not yet known or effective
-at a historical evaluation cutoff. Supply a revision-bearing action feed together with the same
-`--as-of` value:
+Back-adjusted vendor histories can leak a split, cash dividend, or delisting payout that was not yet
+known or effective at a historical evaluation cutoff. Supply a revision-bearing action feed
+together with the same `--as-of` value:
 
 ```bash
 finforecast \
@@ -145,18 +145,19 @@ finforecast \
 ```
 
 Core columns are `action_id,symbol,action_type,effective_at,available_at,revision_id`. Split rows add
-`split_ratio`; `cash_dividend` rows add `cash_amount,currency` and require
+`split_ratio`; `cash_dividend` and `cash_delisting` rows add `cash_amount,currency` and require
 `--price-currency`. Unused type-specific fields must be empty. Rows must be ordered by
 `(action_id, available_at)` and timestamps must carry explicit timezones.
 
-When a selected dividend currency differs from the price currency, `--fx-rates-csv` is mandatory.
+When a selected cash-action currency differs from the price currency, `--fx-rates-csv` is mandatory.
 The revision-bearing FX feed contains
 `base_currency,quote_currency,observed_at,available_at,revision_id,rate`, where `rate` means one
 unit of base currency in quote currency. Direct pairs are preferred. A directed two-leg route can
 be enabled only through an explicit, repeatable `--fx-bridge-currency`; implicit inversion and
 undeclared currencies remain rejected. Rows are ordered by pair, observation time and availability.
-The latest revision known at `--as-of` is selected for each observation, then each route leg uses
-the latest observation at or before the dividend reference close. `--max-fx-age-hours` applies to
+The latest revision known at `--as-of` is selected for each observation. Dividend conversion uses
+the latest FX observation at or before its governed reference close; delisting conversion uses the
+latest observation at or before the delisting effective timestamp. `--max-fx-age-hours` applies to
 every leg independently. For a two-leg route, `--max-fx-leg-skew-hours` also limits the difference
 between leg observation timestamps, preventing individually fresh but asynchronous quotes from being
 combined. Multiple fresh bridge routes, excessive timestamp skew, incomplete routes and unused
@@ -173,18 +174,34 @@ factor = (reference_close - converted_cash_amount) / reference_close
 adjusted_historical_close = raw_historical_close * factor
 ```
 
+For an effective `cash_delisting`, the selected payout is converted into the declared price currency
+under the same point-in-time FX policy and appended at `effective_at` as a synthetic terminal close.
+If volume exists, terminal volume is zero. A delisting must be the only effective delisting, the last
+effective corporate action, and strictly later than every supplied market observation. These
+invariants prevent post-delisting prices or later actions from silently extending a dead instrument:
+
+```text
+terminal_close = cash_amount * product(route_leg_rates)  # foreign payout only
+terminal_volume = 0
+```
+
 The original cash amount/currency, converted price-currency amount, selected FX route and revisions,
-reference timestamp/close and factor are committed to the selected-action digest; volume is
-unchanged. FX evidence separately binds the complete supplied rate lineage, cutoff selection counts,
-pair direction, declared bridge set, per-route observed skew, freshness policy and synchronization
-budget. Multiple actions at exactly the same effective timestamp are rejected because their
-adjustment basis is ambiguous. Evidence also binds raw and adjusted market fingerprints, complete
-revision lineage, and exclusion counts. The input must contain raw, unadjusted observations; this
-contract cannot detect a vendor that silently supplies adjusted prices or false action/FX
-availability timestamps. It supports at most one explicitly declared two-leg directed route per
-conversion and does not model market calendars, implicit inversion, withholding tax or execution
-spreads. Timestamp proximity reduces asynchronous-quote risk but does not prove that the two markets
-were simultaneously liquid.
+and governed reference timestamp/close are committed to the selected-action digest. Dividend
+evidence additionally binds its adjustment factor; delisting evidence binds its synthetic terminal
+close. Dividend volume is unchanged, while a synthetic delisting endpoint has zero volume. Dataset
+metadata reports raw and adjusted observation counts separately. FX evidence binds the complete
+supplied rate lineage, cutoff selection counts, pair direction, declared bridge set, per-route
+observed skew, freshness policy and synchronization budget. Multiple actions at exactly the same
+effective timestamp are rejected because their adjustment basis is ambiguous. Evidence also binds
+raw and adjusted market fingerprints, complete revision lineage, and exclusion counts. The input
+must contain raw, unadjusted observations; this contract cannot detect a vendor that silently
+supplies adjusted prices or false action/FX availability timestamps. It supports at most one
+explicitly declared two-leg directed route per conversion and does not model market calendars,
+implicit inversion, withholding tax or execution spreads. Timestamp proximity reduces asynchronous-
+quote risk but does not prove that the two markets were simultaneously liquid. Cash delistings
+currently require a strictly positive payout; zero recovery, non-cash consideration, partial
+distributions, withholding tax and later bankruptcy recoveries require a separate stateful
+settlement contract.
 
 ## Promotion policy
 
@@ -234,9 +251,8 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 This repository demonstrates evaluation and release engineering. It does **not** claim alpha,
 profitability or readiness for live capital. The CSV boundary validates structure, not economic
 correctness: the snapshot boundary enforces declared availability but cannot verify vendor claims.
-Production data still needs vendor guarantees, delisting treatment, market calendars,
-execution delay, slippage/impact, nested historical tuning
-and live coverage monitoring.
+Production data still needs vendor guarantees, stateful multi-payment delisting treatment, market
+calendars, execution delay, slippage/impact, nested historical tuning and live coverage monitoring.
 
 Those are explicit boundaries because a credible financial ML project should make invalid
 conclusions difficult—not merely make charts attractive.

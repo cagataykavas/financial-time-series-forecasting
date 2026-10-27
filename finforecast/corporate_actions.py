@@ -15,7 +15,8 @@ from .data import MarketData, _fingerprint, _utc_cutoff
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$")
 CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
-SUPPORTED_ACTION_TYPES = frozenset({"split", "cash_dividend"})
+SUPPORTED_ACTION_TYPES = frozenset({"split", "cash_dividend", "cash_delisting"})
+CASH_ACTION_TYPES = frozenset({"cash_dividend", "cash_delisting"})
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class CorporateActionSnapshot:
     selected_actions: int
     applied_splits: int
     applied_cash_dividends: int
+    applied_cash_delistings: int
     fx_source_name: str | None
     fx_max_age_seconds: float | None
     fx_max_leg_skew_seconds: float | None
@@ -62,6 +64,7 @@ class CorporateActionSnapshot:
             "selected_actions": self.selected_actions,
             "applied_splits": self.applied_splits,
             "applied_cash_dividends": self.applied_cash_dividends,
+            "applied_cash_delistings": self.applied_cash_delistings,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
             "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
@@ -182,10 +185,10 @@ class _FxRateBook:
             return float(direct["rate"]), [direct], 0.0
         if not bridge_currencies:
             if direct_error == "stale":
-                raise ValueError("cash dividend FX observation exceeds the maximum age")
+                raise ValueError("cash-action FX observation exceeds the maximum age")
             raise ValueError(
-                "cash dividend requires a point-in-time FX observation at or before "
-                "its reference close"
+                "cash action requires a point-in-time FX observation at or before "
+                "its governed reference timestamp"
             )
 
         routes: list[tuple[float, list[pd.Series]]] = []
@@ -195,15 +198,15 @@ class _FxRateBook:
             if first is not None and second is not None:
                 routes.append((float(first["rate"] * second["rate"]), [first, second]))
         if len(routes) > 1:
-            raise ValueError("cash dividend FX conversion has ambiguous bridge routes")
+            raise ValueError("cash-action FX conversion has ambiguous bridge routes")
         if routes:
             rate, legs = routes[0]
             leg_skew = abs(legs[0]["observed_at"] - legs[1]["observed_at"])
             if leg_skew > max_leg_skew:
-                raise ValueError("cash dividend FX route legs exceed the maximum timestamp skew")
+                raise ValueError("cash-action FX route legs exceed the maximum timestamp skew")
             return rate, legs, leg_skew.total_seconds()
         raise ValueError(
-            "cash dividend requires a fresh point-in-time direct or declared bridge FX route"
+            "cash action requires a fresh point-in-time direct or declared bridge FX route"
         )
 
 
@@ -409,13 +412,13 @@ def _apply_point_in_time_actions(
         raise ValueError(f"supported corporate-action types are: {supported}")
     if "split" in action_types and split_ratio_column not in frame:
         raise ValueError(f"corporate-action CSV is missing columns: ['{split_ratio_column}']")
-    if "cash_dividend" in action_types:
-        dividend_columns = {cash_amount_column, currency_column}
-        missing_dividend = dividend_columns.difference(frame.columns)
-        if missing_dividend:
-            raise ValueError(f"corporate-action CSV is missing columns: {sorted(missing_dividend)}")
+    if CASH_ACTION_TYPES.intersection(action_types):
+        cash_columns = {cash_amount_column, currency_column}
+        missing_cash = cash_columns.difference(frame.columns)
+        if missing_cash:
+            raise ValueError(f"corporate-action CSV is missing columns: {sorted(missing_cash)}")
         if price_currency is None:
-            raise ValueError("cash dividends require a declared price_currency")
+            raise ValueError("cash actions require a declared price_currency")
 
     effective_at = _strict_utc_timestamps(frame[effective_at_column], effective_at_column)
     available_at = _strict_utc_timestamps(frame[available_at_column], available_at_column)
@@ -430,13 +433,13 @@ def _apply_point_in_time_actions(
                 raise ValueError("split ratios must be finite, positive and different from one")
             if math.isfinite(cash_amount) or currency is not None:
                 raise ValueError("split rows cannot declare cash dividend fields")
-        else:
+        elif action_type in CASH_ACTION_TYPES:
             if not math.isfinite(cash_amount) or cash_amount <= 0:
-                raise ValueError("cash dividend amounts must be finite and positive")
+                raise ValueError("cash action amounts must be finite and positive")
             if math.isfinite(ratio):
-                raise ValueError("cash dividend rows cannot declare a split ratio")
+                raise ValueError("cash action rows cannot declare a split ratio")
             if not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None:
-                raise ValueError("cash dividend currency must be an uppercase ISO 4217 code")
+                raise ValueError("cash action currency must be an uppercase ISO 4217 code")
 
     order = list(zip(action_ids, available_at, strict=True))
     if order != sorted(order):
@@ -468,23 +471,30 @@ def _apply_point_in_time_actions(
     applied = selected.loc[effective_mask].sort_values(["effective_at", "action_id"], kind="stable")
     if applied.duplicated(["effective_at"]).any():
         raise ValueError("multiple actions at the same effective timestamp are ambiguous")
+    cash_delistings = applied.loc[applied["action_type"] == "cash_delisting"]
+    if len(cash_delistings) > 1:
+        raise ValueError("multiple effective cash delistings are ambiguous")
+    if not cash_delistings.empty and applied.iloc[-1]["action_type"] != "cash_delisting":
+        raise ValueError("cash delisting must be the terminal effective corporate action")
+    if not cash_delistings.empty and market_index[-1] >= cash_delistings.iloc[0]["effective_at"]:
+        raise ValueError("market observations must end strictly before cash delisting")
     required_fx_pairs = {
         (row.currency, price_currency)
         for row in applied.itertuples(index=False)
-        if row.action_type == "cash_dividend" and row.currency != price_currency
+        if row.action_type in CASH_ACTION_TYPES and row.currency != price_currency
     }
-    dividend_currencies = {base for base, _ in required_fx_pairs}
-    if dividend_currencies.intersection(fx_bridge_currencies):
-        raise ValueError("a dividend currency cannot also be an FX bridge currency")
+    cash_currencies = {base for base, _ in required_fx_pairs}
+    if cash_currencies.intersection(fx_bridge_currencies):
+        raise ValueError("a cash-action currency cannot also be an FX bridge currency")
     allowed_fx_pairs = set(required_fx_pairs)
     for base, quote in required_fx_pairs:
         for bridge in fx_bridge_currencies:
             allowed_fx_pairs.add((base, bridge))
             allowed_fx_pairs.add((bridge, quote))
     if required_fx_pairs and fx_rates_path is None:
-        raise ValueError("foreign-currency cash dividends require an FX-rate CSV")
+        raise ValueError("foreign-currency cash actions require an FX-rate CSV")
     if not required_fx_pairs and fx_rates_path is not None:
-        raise ValueError("FX-rate CSV is not allowed without a foreign-currency dividend")
+        raise ValueError("FX-rate CSV is not allowed without a foreign-currency cash action")
     fx_book = (
         _load_fx_rate_book(
             fx_rates_path,
@@ -521,18 +531,21 @@ def _apply_point_in_time_actions(
         else:
             reference_positions = market_index[historical]
             if reference_positions.empty:
-                raise ValueError("cash dividend requires a pre-effective market observation")
+                raise ValueError("cash action requires a pre-effective market observation")
             reference_at = reference_positions[-1]
             reference_close = float(adjusted_close.loc[reference_at])
             converted_cash_amount = row.cash_amount
             fx_payload: dict[str, object] = {}
             if row.currency != price_currency:
                 if fx_book is None:  # guarded above; retained as a fail-closed invariant
-                    raise ValueError("foreign-currency cash dividend has no FX-rate book")
+                    raise ValueError("foreign-currency cash action has no FX-rate book")
+                fx_reference_at = (
+                    row.effective_at if row.action_type == "cash_delisting" else reference_at
+                )
                 fx_rate, fx_legs, observed_leg_skew = fx_book.resolve(
                     row.currency,
                     price_currency,
-                    reference_at,
+                    fx_reference_at,
                     fx_age,
                     fx_leg_skew,
                     fx_bridge_currencies,
@@ -559,20 +572,35 @@ def _apply_point_in_time_actions(
                     ],
                     "converted_cash_amount": converted_cash_amount,
                 }
-            if converted_cash_amount >= reference_close:
-                raise ValueError("cash dividend must be smaller than its reference close")
-            factor = (reference_close - converted_cash_amount) / reference_close
-            adjusted_close.loc[historical] = adjusted_close.loc[historical] * factor
-            payload.update(
-                {
-                    "cash_amount": row.cash_amount,
-                    "currency": row.currency,
-                    "reference_at": reference_at.isoformat(),
-                    "reference_close": reference_close,
-                    "back_adjustment_factor": factor,
-                    **fx_payload,
-                }
-            )
+            if row.action_type == "cash_dividend":
+                if converted_cash_amount >= reference_close:
+                    raise ValueError("cash dividend must be smaller than its reference close")
+                factor = (reference_close - converted_cash_amount) / reference_close
+                adjusted_close.loc[historical] = adjusted_close.loc[historical] * factor
+                payload.update(
+                    {
+                        "cash_amount": row.cash_amount,
+                        "currency": row.currency,
+                        "reference_at": reference_at.isoformat(),
+                        "reference_close": reference_close,
+                        "back_adjustment_factor": factor,
+                        **fx_payload,
+                    }
+                )
+            else:
+                adjusted_close.loc[row.effective_at] = converted_cash_amount
+                if adjusted_volume is not None:
+                    adjusted_volume.loc[row.effective_at] = 0.0
+                payload.update(
+                    {
+                        "cash_amount": row.cash_amount,
+                        "currency": row.currency,
+                        "reference_at": reference_at.isoformat(),
+                        "reference_close": reference_close,
+                        "terminal_close": converted_cash_amount,
+                        **fx_payload,
+                    }
+                )
         selected_payload.append(payload)
 
     if fx_book is not None and fx_book.supplied_pairs != used_fx_pairs:
@@ -618,6 +646,7 @@ def _apply_point_in_time_actions(
         selected_actions=len(selected),
         applied_splits=int((applied["action_type"] == "split").sum()),
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
+        applied_cash_delistings=int((applied["action_type"] == "cash_delisting").sum()),
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
         fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
@@ -640,7 +669,7 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 5,
+                "schema_version": 6,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
@@ -675,7 +704,7 @@ def apply_point_in_time_corporate_actions(
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
 ) -> MarketData:
-    """Apply point-in-time splits and optionally FX-converted cash dividends."""
+    """Apply point-in-time splits, dividends, and terminal cash delistings."""
 
     return _apply_point_in_time_actions(
         market,

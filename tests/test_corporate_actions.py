@@ -72,6 +72,31 @@ def foreign_dividend_rows() -> list[dict[str, object]]:
     return rows
 
 
+def delisting_rows(currency: str = "USD") -> list[dict[str, object]]:
+    return [
+        {
+            "action_id": "delisting-2024-01",
+            "symbol": "ACME",
+            "action_type": "cash_delisting",
+            "effective_at": "2024-01-06T00:00:00Z",
+            "available_at": "2024-01-03T10:00:00Z",
+            "revision_id": "r1",
+            "cash_amount": 40.0,
+            "currency": currency,
+        },
+        {
+            "action_id": "delisting-2024-01",
+            "symbol": "ACME",
+            "action_type": "cash_delisting",
+            "effective_at": "2024-01-06T00:00:00Z",
+            "available_at": "2024-01-05T10:00:00Z",
+            "revision_id": "r2",
+            "cash_amount": 45.0,
+            "currency": currency,
+        },
+    ]
+
+
 def fx_rates(tmp_path: Path, rows: list[dict[str, object]] | None = None) -> Path:
     path = tmp_path / "fx-rates.csv"
     pd.DataFrame(
@@ -207,6 +232,113 @@ def test_future_dividend_revision_cannot_enter_historical_snapshot(tmp_path: Pat
     assert adjusted.close.iloc[:2].tolist() == pytest.approx([100.0 * factor, 102.0 * factor])
     assert adjusted.corporate_actions.excluded_unavailable_revisions == 1
     assert adjusted.corporate_actions.superseded_revisions == 0
+
+
+def test_cash_delisting_adds_point_in_time_terminal_payout(tmp_path: Path):
+    source = dividend_market(tmp_path)
+    adjusted = apply_point_in_time_corporate_actions(
+        source,
+        actions(tmp_path, delisting_rows()),
+        as_of="2024-01-07T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+    )
+
+    assert adjusted.close.iloc[:-1].equals(source.close)
+    assert adjusted.close.index[-1] == pd.Timestamp("2024-01-06T00:00:00Z")
+    assert adjusted.close.iloc[-1] == 45.0
+    assert adjusted.volume.iloc[-1] == 0.0
+    snapshot = adjusted.corporate_actions
+    assert snapshot.applied_cash_delistings == 1
+    assert snapshot.applied_cash_dividends == 0
+    assert snapshot.superseded_revisions == 1
+    assert adjusted.metadata()["kind"] == "point_in_time_total_return_adjusted_market"
+    assert snapshot.unadjusted_market_sha256 != snapshot.adjusted_market_sha256
+
+
+def test_future_delisting_revision_cannot_rewrite_terminal_payout(tmp_path: Path):
+    rows = delisting_rows()
+    rows[1]["available_at"] = "2024-01-08T10:00:00Z"
+
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, rows),
+        as_of="2024-01-07T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+    )
+
+    assert adjusted.close.iloc[-1] == 40.0
+    assert adjusted.corporate_actions.excluded_unavailable_revisions == 1
+    assert adjusted.corporate_actions.superseded_revisions == 0
+
+
+def test_foreign_cash_delisting_uses_effective_time_fx(tmp_path: Path):
+    rates = [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-06T00:00:00Z",
+            "available_at": "2024-01-06T01:00:00Z",
+            "revision_id": "fx-r1",
+            "rate": 1.1,
+        }
+    ]
+    adjusted = apply_point_in_time_corporate_actions(
+        dividend_market(tmp_path),
+        actions(tmp_path, delisting_rows("EUR")),
+        as_of="2024-01-07T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        fx_rates_path=fx_rates(tmp_path, rates),
+        max_fx_age="24 hours",
+    )
+
+    assert adjusted.close.iloc[-1] == pytest.approx(45.0 * 1.1)
+    assert adjusted.corporate_actions.fx_routes == 1
+    assert adjusted.corporate_actions.fx_selected_observations == 1
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (
+            [{**delisting_rows()[0], "effective_at": "2024-01-05T00:00:00Z"}],
+            "must end strictly before",
+        ),
+        (
+            [
+                delisting_rows()[0],
+                {
+                    **delisting_rows()[0],
+                    "action_id": "delisting-2024-02",
+                    "effective_at": "2024-01-07T00:00:00Z",
+                },
+            ],
+            "multiple effective cash delistings",
+        ),
+        (
+            [
+                {**delisting_rows()[0], "action_id": "a-delisting"},
+                {
+                    **dividend_rows()[0],
+                    "action_id": "z-dividend",
+                    "effective_at": "2024-01-07T00:00:00Z",
+                },
+            ],
+            "must be the terminal",
+        ),
+    ],
+)
+def test_cash_delisting_must_be_unique_terminal_and_post_market(tmp_path: Path, rows, message: str):
+    with pytest.raises(ValueError, match=message):
+        apply_point_in_time_corporate_actions(
+            dividend_market(tmp_path),
+            actions(tmp_path, rows),
+            as_of="2024-01-08T00:00:00Z",
+            symbol="ACME",
+            price_currency="USD",
+        )
 
 
 def test_converts_foreign_dividend_with_latest_known_direct_fx_revision(tmp_path: Path):
