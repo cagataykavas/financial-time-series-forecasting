@@ -24,7 +24,14 @@ def _build_evidence(
     seed: int,
 ) -> dict[str, Any]:
     target_spec = ForecastTargetSpec(horizon=1)
-    supervised = make_supervised_features(close, volume, target_spec=target_spec)
+    action_snapshot = dataset_metadata.get("corporate_actions", {})
+    allow_terminal_zero = bool(action_snapshot.get("terminal_zero_recovery", False))
+    supervised = make_supervised_features(
+        close,
+        volume,
+        target_spec=target_spec,
+        allow_terminal_zero=allow_terminal_zero,
+    )
     split_config = WalkForwardConfig(
         min_train_size=250,
         test_size=25,
@@ -91,6 +98,11 @@ def _build_evidence(
                 "Cash-delisting terminal observations use only payout revisions known and "
                 "effective at the cutoff."
             )
+        if action_snapshot["terminal_zero_recovery"]:
+            snapshot_claims.append(
+                "A zero terminal close is admitted only for an explicit point-in-time "
+                "cash-delisting recovery."
+            )
         if action_snapshot["applied_cash_dividends"]:
             snapshot_claims.append(
                 "Split and cash-dividend adjustments use only corporate-action revisions "
@@ -107,7 +119,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 9,
+        "schema_version": 10,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

@@ -75,7 +75,7 @@ def dividend_actions_csv(tmp_path, market_path, currency="USD"):
     return path
 
 
-def delisting_actions_csv(tmp_path, market_path, currency="USD"):
+def delisting_actions_csv(tmp_path, market_path, currency="USD", recovery_ratio=0.75):
     frame = pd.read_csv(market_path)
     timestamps = pd.to_datetime(frame["timestamp"], utc=True)
     path = tmp_path / "delisting-vintages.csv"
@@ -88,7 +88,7 @@ def delisting_actions_csv(tmp_path, market_path, currency="USD"):
                 "effective_at": timestamps.iloc[-1] + pd.Timedelta(hours=1),
                 "available_at": timestamps.iloc[-2],
                 "revision_id": "vendor-r1",
-                "cash_amount": float(frame.loc[len(frame) - 1, "close"]) * 0.75,
+                "cash_amount": float(frame.loc[len(frame) - 1, "close"]) * recovery_ratio,
                 "currency": currency,
             }
         ]
@@ -270,7 +270,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 9
+    assert evidence["schema_version"] == 10
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -305,13 +305,47 @@ def test_cli_binds_cash_delisting_terminal_payout_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 9
+    assert evidence["schema_version"] == 10
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert evidence["dataset"]["raw_observations"] == 340
     assert evidence["dataset"]["adjusted_observations"] == 341
     assert snapshot["applied_cash_delistings"] == 1
     assert snapshot["applied_cash_dividends"] == 0
     assert any("Cash-delisting terminal observations" in claim for claim in evidence["claims"])
+
+
+def test_cli_binds_zero_recovery_without_accepting_ordinary_zero_prices(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = delisting_actions_csv(tmp_path, source, currency="EUR", recovery_ratio=0.0)
+    output = tmp_path / "zero-recovery-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--symbol",
+                "ACME",
+                "--price-currency",
+                "USD",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    snapshot = evidence["dataset"]["corporate_actions"]
+    assert evidence["schema_version"] == 10
+    assert snapshot["terminal_zero_recovery"] is True
+    assert snapshot["fx_source_name"] is None
+    assert any("zero terminal close" in claim for claim in evidence["claims"])
 
 
 def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):

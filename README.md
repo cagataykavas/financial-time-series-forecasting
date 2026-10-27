@@ -176,6 +176,7 @@ adjusted_historical_close = raw_historical_close * factor
 
 For an effective `cash_delisting`, the selected payout is converted into the declared price currency
 under the same point-in-time FX policy and appended at `effective_at` as a synthetic terminal close.
+An explicitly declared zero payout records zero recovery without requiring a meaningless FX quote.
 If volume exists, terminal volume is zero. A delisting must be the only effective delisting, the last
 effective corporate action, and strictly later than every supplied market observation. These
 invariants prevent post-delisting prices or later actions from silently extending a dead instrument:
@@ -184,6 +185,11 @@ invariants prevent post-delisting prices or later actions from silently extendin
 terminal_close = cash_amount * product(route_leg_rates)  # foreign payout only
 terminal_volume = 0
 ```
+
+Ordinary market ingestion still rejects zero prices. Feature construction admits a zero only when
+the point-in-time corporate-action snapshot marks the single final observation as an explicit zero-
+recovery delisting. The resulting final supervised target is exactly `-1.0`; an earlier or unbound
+zero remains invalid.
 
 The original cash amount/currency, converted price-currency amount, selected FX route and revisions,
 and governed reference timestamp/close are committed to the selected-action digest. Dividend
@@ -198,10 +204,9 @@ must contain raw, unadjusted observations; this contract cannot detect a vendor 
 supplies adjusted prices or false action/FX availability timestamps. It supports at most one
 explicitly declared two-leg directed route per conversion and does not model market calendars,
 implicit inversion, withholding tax or execution spreads. Timestamp proximity reduces asynchronous-
-quote risk but does not prove that the two markets were simultaneously liquid. Cash delistings
-currently require a strictly positive payout; zero recovery, non-cash consideration, partial
-distributions, withholding tax and later bankruptcy recoveries require a separate stateful
-settlement contract.
+quote risk but does not prove that the two markets were simultaneously liquid. Non-cash
+consideration, partial or delayed distributions, withholding tax and later bankruptcy recoveries
+require a separate stateful settlement contract.
 
 ## Promotion policy
 
