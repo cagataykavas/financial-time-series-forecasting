@@ -58,7 +58,8 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
-├── corporate_actions.py # point-in-time split/dividend/delisting/FX evidence
+├── corporate_actions.py # point-in-time split/dividend/delisting evidence
+├── fx.py                # governed point-in-time direct/bridged FX selection
 ├── data.py         # validated CSV loading and normalized data identity
 ├── domain.py       # fold, interval and promotion domain records
 ├── evidence.py     # reproducible end-to-end verification artifact
@@ -219,6 +220,7 @@ finforecast \
   --as-of 2026-06-30T23:59:59Z \
   --corporate-actions-csv delisting-vintages.csv \
   --settlement-ledger-csv settlement-vintages.csv \
+  --settlement-fx-rates-csv settlement-fx-vintages.csv \
   --symbol ACME \
   --price-currency USD \
   --evidence \
@@ -227,22 +229,29 @@ finforecast \
 
 The settlement feed has the strict schema
 `event_id,symbol,event_type,effective_at,available_at,revision_id,cash_amount,currency`.
-`cash_flow` rows must be positive, use the declared price currency, occur strictly after the final
+`cash_flow` rows must be positive, use uppercase ISO 4217 currencies, occur strictly after the final
 market observation, and be effective no later than closeout. A single `closeout` row must carry zero
 cash, no currency, and exactly match the delisting effective timestamp. The latest revision known at
 `--as-of` is selected per event; unavailable revisions cannot rewrite the historical recovery target.
-The synthetic terminal close is the undiscounted sum of effective cash flows:
+
+Foreign cash flows require the separate `--settlement-fx-rates-csv` feed. The standard FX CSV is not
+silently reused: settlement conversion has independent `--settlement-max-fx-age-hours`,
+`--settlement-max-fx-leg-skew-hours`, and repeatable `--settlement-fx-bridge-currency` policy. Each
+cash flow selects the latest admissible direct or declared two-leg route at that cash flow's own
+`effective_at`; a later closeout-date quote cannot be reused for an earlier payment. The synthetic
+terminal close is the undiscounted sum in the instrument's price currency:
 
 ```text
-terminal_close = sum(selected_effective_cash_flows)
+terminal_close = sum(cash_amount_i * product(route_leg_rates_at_effective_at_i))
 ```
 
 Evidence binds selection counts, total cash, closeout time, selected-event digest, complete lineage
-digest, and the resulting market fingerprint. Unknown columns, mixed symbols, event-type changes,
-missing or non-terminal closeout, foreign currency, pre-delisting cash flows, and a non-zero direct
-delisting payout fail closed. This contract intentionally does not model discounting, reinvestment,
-withholding tax, FX conversion, non-cash consideration, or distributions announced after the
-governed cutoff.
+digest, FX revision lineage and route metadata, and the resulting market fingerprint. Unknown
+columns, mixed symbols, event-type changes, missing or non-terminal closeout, undeclared/unused FX
+routes, stale or future-only quotes, pre-delisting cash flows, and a non-zero direct delisting payout
+fail closed. This contract intentionally does not model discounting, reinvestment, withholding tax,
+execution spreads, non-cash consideration, or distributions announced after the governed cutoff.
+Vendor availability timestamps and ISO currency labels remain external governance dependencies.
 
 ## Promotion policy
 

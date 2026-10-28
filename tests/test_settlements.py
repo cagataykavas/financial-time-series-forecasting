@@ -63,6 +63,33 @@ def write_settlement(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
     return path
 
 
+def write_fx(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
+    path = tmp_path / "settlement-fx.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def settlement_fx_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-05T05:30:00Z",
+            "available_at": "2024-01-05T05:45:00Z",
+            "revision_id": "morning-r1",
+            "rate": 1.1,
+        },
+        {
+            "base_currency": "EUR",
+            "quote_currency": "USD",
+            "observed_at": "2024-01-05T17:30:00Z",
+            "available_at": "2024-01-05T17:45:00Z",
+            "revision_id": "evening-r1",
+            "rate": 1.2,
+        },
+    ]
+
+
 def market(tmp_path: Path):
     path = tmp_path / "prices.csv"
     pd.DataFrame(
@@ -131,6 +158,96 @@ def test_settlement_drives_terminal_total_recovery(tmp_path: Path) -> None:
     assert snapshot.metadata()["settlement"]["applied_cash_flows"] == 2
 
 
+def test_converts_each_foreign_cash_flow_at_its_effective_timestamp(tmp_path: Path) -> None:
+    rows = settlement_rows()
+    rows[0]["currency"] = "EUR"
+    rows[1]["currency"] = "EUR"
+    rows[2]["currency"] = "EUR"
+
+    adjusted = apply_point_in_time_corporate_actions(
+        market(tmp_path),
+        delisting(tmp_path),
+        as_of=AS_OF,
+        symbol="ACME",
+        price_currency="USD",
+        settlement_ledger_path=write_settlement(tmp_path, rows),
+        settlement_fx_rates_path=write_fx(tmp_path, settlement_fx_rows()),
+        settlement_max_fx_age="2 hours",
+    )
+
+    settlement = adjusted.corporate_actions.settlement
+    assert settlement is not None
+    assert settlement.total_cash_amount == pytest.approx(29.0)
+    assert settlement.fx_routes == 2
+    assert settlement.fx_selected_observations == 2
+    assert settlement.fx_source_name == "settlement-fx.csv"
+    assert settlement.fx_lineage_sha256 is not None
+    assert adjusted.close.iloc[-1] == pytest.approx(29.0)
+
+
+def test_does_not_reuse_a_later_quote_for_an_earlier_cash_flow(tmp_path: Path) -> None:
+    rows = settlement_rows()
+    rows[0]["currency"] = "EUR"
+    rows[1]["currency"] = "EUR"
+    rows[2]["currency"] = "EUR"
+
+    with pytest.raises(ValueError, match="at or before its governed reference timestamp"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, rows),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            fx_rates_path=write_fx(tmp_path, settlement_fx_rows()[1:]),
+        )
+
+
+def test_settlement_fx_uses_only_revisions_known_at_cutoff(tmp_path: Path) -> None:
+    rows = settlement_rows()
+    rows[0]["currency"] = "EUR"
+    rows[1]["currency"] = "EUR"
+    rows[2]["currency"] = "EUR"
+    rates = settlement_fx_rows()
+    rates.insert(
+        1,
+        {
+            **rates[0],
+            "available_at": "2024-01-08T00:00:00Z",
+            "revision_id": "morning-r2",
+            "rate": 9.9,
+        },
+    )
+
+    snapshot = load_point_in_time_settlement(
+        write_settlement(tmp_path, rows),
+        as_of=AS_OF,
+        symbol="ACME",
+        price_currency="USD",
+        market_end=MARKET_END,
+        expected_closeout_at=CLOSEOUT,
+        fx_rates_path=write_fx(tmp_path, rates),
+    )
+
+    assert snapshot.total_cash_amount == pytest.approx(29.0)
+    assert snapshot.fx_excluded_unavailable_revisions == 1
+
+
+def test_foreign_settlement_requires_separate_fx_feed(tmp_path: Path) -> None:
+    rows = settlement_rows()
+    rows[0]["currency"] = "EUR"
+
+    with pytest.raises(ValueError, match="require a settlement FX-rate CSV"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, rows),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+        )
+
+
 def test_settlement_cannot_double_count_direct_delisting_payout(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must declare zero cash"):
         apply_point_in_time_corporate_actions(
@@ -152,8 +269,8 @@ def test_settlement_cannot_double_count_direct_delisting_payout(tmp_path: Path) 
             "after market data",
         ),
         (
-            lambda rows: rows[0].update({"currency": "EUR"}),
-            "declared price_currency",
+            lambda rows: rows[0].update({"currency": "eur"}),
+            "uppercase ISO 4217",
         ),
         (
             lambda rows: rows[-1].update({"effective_at": "2024-01-06T12:00:00Z"}),
