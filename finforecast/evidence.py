@@ -98,6 +98,11 @@ def _build_evidence(
                 "Cash-delisting terminal observations use only payout revisions known and "
                 "effective at the cutoff."
             )
+        if action_snapshot["settlement"] is not None:
+            snapshot_claims.append(
+                "Terminal recovery sums only same-currency settlement cash-flow revisions "
+                "known and effective by an explicit closeout."
+            )
         if action_snapshot["terminal_zero_recovery"]:
             snapshot_claims.append(
                 "A zero terminal close is admitted only for an explicit point-in-time "
@@ -119,7 +124,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 10,
+        "schema_version": 11,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

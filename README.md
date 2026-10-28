@@ -204,9 +204,45 @@ must contain raw, unadjusted observations; this contract cannot detect a vendor 
 supplies adjusted prices or false action/FX availability timestamps. It supports at most one
 explicitly declared two-leg directed route per conversion and does not model market calendars,
 implicit inversion, withholding tax or execution spreads. Timestamp proximity reduces asynchronous-
-quote risk but does not prove that the two markets were simultaneously liquid. Non-cash
-consideration, partial or delayed distributions, withholding tax and later bankruptcy recoveries
-require a separate stateful settlement contract.
+quote risk but does not prove that the two markets were simultaneously liquid.
+
+### Revision-aware delisting settlement
+
+A cash delisting can alternatively bind multiple delayed or partial distributions through
+`--settlement-ledger-csv`. In this mode the corporate-action row is only a closeout anchor and must
+declare zero cash in the instrument's price currency, preventing the direct payout and ledger from
+being double counted:
+
+```bash
+finforecast \
+  --csv price-vintages.csv \
+  --as-of 2026-06-30T23:59:59Z \
+  --corporate-actions-csv delisting-vintages.csv \
+  --settlement-ledger-csv settlement-vintages.csv \
+  --symbol ACME \
+  --price-currency USD \
+  --evidence \
+  --output artifacts/settlement-adjusted
+```
+
+The settlement feed has the strict schema
+`event_id,symbol,event_type,effective_at,available_at,revision_id,cash_amount,currency`.
+`cash_flow` rows must be positive, use the declared price currency, occur strictly after the final
+market observation, and be effective no later than closeout. A single `closeout` row must carry zero
+cash, no currency, and exactly match the delisting effective timestamp. The latest revision known at
+`--as-of` is selected per event; unavailable revisions cannot rewrite the historical recovery target.
+The synthetic terminal close is the undiscounted sum of effective cash flows:
+
+```text
+terminal_close = sum(selected_effective_cash_flows)
+```
+
+Evidence binds selection counts, total cash, closeout time, selected-event digest, complete lineage
+digest, and the resulting market fingerprint. Unknown columns, mixed symbols, event-type changes,
+missing or non-terminal closeout, foreign currency, pre-delisting cash flows, and a non-zero direct
+delisting payout fail closed. This contract intentionally does not model discounting, reinvestment,
+withholding tax, FX conversion, non-cash consideration, or distributions announced after the
+governed cutoff.
 
 ## Promotion policy
 

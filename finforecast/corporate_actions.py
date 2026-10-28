@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from .data import MarketData, _fingerprint, _utc_cutoff
+from .settlements import SettlementSnapshot, load_point_in_time_settlement
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$")
@@ -34,6 +35,7 @@ class CorporateActionSnapshot:
     applied_cash_dividends: int
     applied_cash_delistings: int
     terminal_zero_recovery: bool
+    settlement: SettlementSnapshot | None
     fx_source_name: str | None
     fx_max_age_seconds: float | None
     fx_max_leg_skew_seconds: float | None
@@ -67,6 +69,7 @@ class CorporateActionSnapshot:
             "applied_cash_dividends": self.applied_cash_dividends,
             "applied_cash_delistings": self.applied_cash_delistings,
             "terminal_zero_recovery": self.terminal_zero_recovery,
+            "settlement": self.settlement.metadata() if self.settlement else None,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
             "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
@@ -322,6 +325,7 @@ def _apply_point_in_time_actions(
     symbol: str,
     price_currency: str | None,
     fx_rates_path: str | Path | None,
+    settlement_ledger_path: str | Path | None,
     max_fx_age: object,
     max_fx_leg_skew: object,
     fx_bridge_currencies: tuple[str, ...],
@@ -486,6 +490,23 @@ def _apply_point_in_time_actions(
         raise ValueError("cash delisting must be the terminal effective corporate action")
     if not cash_delistings.empty and market_index[-1] >= cash_delistings.iloc[0]["effective_at"]:
         raise ValueError("market observations must end strictly before cash delisting")
+    settlement: SettlementSnapshot | None = None
+    if settlement_ledger_path is not None:
+        if cash_delistings.empty:
+            raise ValueError("settlement ledger requires one effective cash delisting")
+        delisting = cash_delistings.iloc[0]
+        if delisting["cash_amount"] != 0 or delisting["currency"] != price_currency:
+            raise ValueError(
+                "settlement-backed cash delisting must declare zero cash in price_currency"
+            )
+        settlement = load_point_in_time_settlement(
+            settlement_ledger_path,
+            as_of=cutoff,
+            symbol=symbol,
+            price_currency=price_currency,
+            market_end=market_index[-1],
+            expected_closeout_at=delisting["effective_at"],
+        )
     required_fx_pairs = {
         (row.currency, price_currency)
         for row in applied.itertuples(index=False)
@@ -548,7 +569,13 @@ def _apply_point_in_time_actions(
             reference_close = float(adjusted_close.loc[reference_at])
             converted_cash_amount = row.cash_amount
             fx_payload: dict[str, object] = {}
-            if row.cash_amount > 0 and row.currency != price_currency:
+            if settlement is not None and row.action_type == "cash_delisting":
+                converted_cash_amount = settlement.total_cash_amount
+                fx_payload = {
+                    "settlement_selected_events_sha256": settlement.selected_events_sha256,
+                    "settlement_lineage_sha256": settlement.lineage_sha256,
+                }
+            elif row.cash_amount > 0 and row.currency != price_currency:
                 if fx_book is None:  # guarded above; retained as a fail-closed invariant
                     raise ValueError("foreign-currency cash action has no FX-rate book")
                 fx_reference_at = (
@@ -660,8 +687,14 @@ def _apply_point_in_time_actions(
         applied_cash_dividends=int((applied["action_type"] == "cash_dividend").sum()),
         applied_cash_delistings=int((applied["action_type"] == "cash_delisting").sum()),
         terminal_zero_recovery=bool(
-            not cash_delistings.empty and cash_delistings.iloc[0]["cash_amount"] == 0
+            not cash_delistings.empty
+            and (
+                settlement.total_cash_amount == 0
+                if settlement is not None
+                else cash_delistings.iloc[0]["cash_amount"] == 0
+            )
         ),
+        settlement=settlement,
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
         fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
@@ -684,7 +717,7 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 7,
+                "schema_version": 8,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
@@ -692,6 +725,7 @@ def _apply_point_in_time_actions(
                 "fx_max_leg_skew_seconds": fx_leg_skew.total_seconds() if fx_book else None,
                 "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
+                "settlement_lineage_sha256": settlement.lineage_sha256 if settlement else None,
                 "selection": "latest_available_revision_then_effective_action",
                 "rows": lineage_payload,
             }
@@ -715,6 +749,7 @@ def apply_point_in_time_corporate_actions(
     symbol: str,
     price_currency: str | None = None,
     fx_rates_path: str | Path | None = None,
+    settlement_ledger_path: str | Path | None = None,
     max_fx_age: object = "7 days",
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
@@ -728,6 +763,7 @@ def apply_point_in_time_corporate_actions(
         symbol=symbol,
         price_currency=price_currency,
         fx_rates_path=fx_rates_path,
+        settlement_ledger_path=settlement_ledger_path,
         max_fx_age=max_fx_age,
         max_fx_leg_skew=max_fx_leg_skew,
         fx_bridge_currencies=fx_bridge_currencies,
@@ -751,6 +787,7 @@ def apply_point_in_time_splits(
         symbol=symbol,
         price_currency=None,
         fx_rates_path=None,
+        settlement_ledger_path=None,
         max_fx_age="7 days",
         max_fx_leg_skew="1 hour",
         fx_bridge_currencies=(),

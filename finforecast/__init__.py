@@ -15,6 +15,7 @@ from .data import (
 from .engine import ForecastExperiment
 from .features import ForecastTargetSpec
 from .intervals import SplitConformalCalibrator
+from .settlements import SettlementSnapshot, load_point_in_time_settlement
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 __version__ = "2.1.0"
@@ -28,10 +29,12 @@ __all__ = [
     "MarketData",
     "MarketDataSnapshot",
     "SplitConformalCalibrator",
+    "SettlementSnapshot",
     "WalkForwardConfig",
     "WalkForwardSplitter",
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "load_market_csv",
     "load_point_in_time_market_csv",
+    "load_point_in_time_settlement",
 ]

@@ -64,6 +64,11 @@ def main(argv: list[str] | None = None) -> int:
         help="revision-bearing direct FX rates for foreign-currency cash actions",
     )
     parser.add_argument(
+        "--settlement-ledger-csv",
+        type=Path,
+        help="revision-bearing same-currency cash flows ending in an explicit delisting closeout",
+    )
+    parser.add_argument(
         "--max-fx-age-hours",
         type=_positive_float,
         default=168.0,
@@ -98,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--price-currency requires --corporate-actions-csv")
     if args.fx_rates_csv is not None and args.corporate_actions_csv is None:
         parser.error("--fx-rates-csv requires --corporate-actions-csv")
+    if args.settlement_ledger_csv is not None and args.corporate_actions_csv is None:
+        parser.error("--settlement-ledger-csv requires --corporate-actions-csv")
     if args.fx_bridge_currency and args.fx_rates_csv is None:
         parser.error("--fx-bridge-currency requires --fx-rates-csv")
     if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
@@ -128,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
                     symbol=args.symbol,
                     price_currency=args.price_currency,
                     fx_rates_path=args.fx_rates_csv,
+                    settlement_ledger_path=args.settlement_ledger_csv,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
                     max_fx_leg_skew=f"{args.max_fx_leg_skew_hours} hours",
                     fx_bridge_currencies=tuple(args.fx_bridge_currency),
