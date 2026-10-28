@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from .data import _utc_cutoff
+from .fx import load_fx_rate_book
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$")
@@ -47,6 +48,18 @@ class SettlementSnapshot:
     superseded_revisions: int
     closeout_at: str
     total_cash_amount: float
+    fx_source_name: str | None
+    fx_max_age_seconds: float | None
+    fx_max_leg_skew_seconds: float | None
+    fx_observed_max_leg_skew_seconds: float | None
+    fx_bridge_currencies: tuple[str, ...]
+    fx_routes: int
+    fx_raw_rows: int
+    fx_eligible_revisions: int
+    fx_selected_observations: int
+    fx_excluded_unavailable_revisions: int
+    fx_superseded_revisions: int
+    fx_lineage_sha256: str | None
     selected_events_sha256: str
     lineage_sha256: str
 
@@ -65,6 +78,18 @@ class SettlementSnapshot:
             "superseded_revisions": self.superseded_revisions,
             "closeout_at": self.closeout_at,
             "total_cash_amount": self.total_cash_amount,
+            "fx_source_name": self.fx_source_name,
+            "fx_max_age_seconds": self.fx_max_age_seconds,
+            "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
+            "fx_observed_max_leg_skew_seconds": self.fx_observed_max_leg_skew_seconds,
+            "fx_bridge_currencies": list(self.fx_bridge_currencies),
+            "fx_routes": self.fx_routes,
+            "fx_raw_rows": self.fx_raw_rows,
+            "fx_eligible_revisions": self.fx_eligible_revisions,
+            "fx_selected_observations": self.fx_selected_observations,
+            "fx_excluded_unavailable_revisions": self.fx_excluded_unavailable_revisions,
+            "fx_superseded_revisions": self.fx_superseded_revisions,
+            "fx_lineage_sha256": self.fx_lineage_sha256,
             "selected_events_sha256": self.selected_events_sha256,
             "lineage_sha256": self.lineage_sha256,
         }
@@ -103,6 +128,16 @@ def _identifiers(values: pd.Series, column: str) -> list[str]:
     return result
 
 
+def _positive_duration(value: object, name: str) -> pd.Timedelta:
+    try:
+        duration = pd.Timedelta(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive duration") from exc
+    if pd.isna(duration) or duration <= pd.Timedelta(0):
+        raise ValueError(f"{name} must be a positive duration")
+    return duration
+
+
 def load_point_in_time_settlement(
     path: str | Path,
     *,
@@ -111,17 +146,33 @@ def load_point_in_time_settlement(
     price_currency: str,
     market_end: object,
     expected_closeout_at: object,
+    fx_rates_path: str | Path | None = None,
+    max_fx_age: object = "7 days",
+    max_fx_leg_skew: object = "1 hour",
+    fx_bridge_currencies: tuple[str, ...] = (),
 ) -> SettlementSnapshot:
     """Select the latest known settlement revisions and require an explicit closeout.
 
-    Cash flows are summed without discounting or reinvestment. Foreign-currency
-    entries are rejected rather than silently sharing the corporate-action FX route.
+    Cash flows are summed without discounting or reinvestment. Each foreign-currency
+    payment is converted at its own effective timestamp under a separate FX policy.
     """
 
     if not isinstance(symbol, str) or SYMBOL_RE.fullmatch(symbol) is None:
         raise ValueError("symbol must be an uppercase stable identifier")
     if not isinstance(price_currency, str) or CURRENCY_RE.fullmatch(price_currency) is None:
         raise ValueError("price_currency must be an uppercase ISO 4217 code")
+    if not isinstance(fx_bridge_currencies, tuple) or any(
+        not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None
+        for currency in fx_bridge_currencies
+    ):
+        raise ValueError("settlement fx_bridge_currencies must contain uppercase ISO 4217 codes")
+    if len(set(fx_bridge_currencies)) != len(fx_bridge_currencies):
+        raise ValueError("settlement fx_bridge_currencies must be unique")
+    fx_bridge_currencies = tuple(sorted(fx_bridge_currencies))
+    if price_currency in fx_bridge_currencies:
+        raise ValueError("price_currency cannot also be a settlement FX bridge currency")
+    fx_age = _positive_duration(max_fx_age, "settlement max_fx_age")
+    fx_leg_skew = _positive_duration(max_fx_leg_skew, "settlement max_fx_leg_skew")
     cutoff = _utc_cutoff(as_of)
     market_timestamp = _utc_cutoff(market_end)
     closeout_timestamp = _utc_cutoff(expected_closeout_at)
@@ -163,8 +214,8 @@ def load_point_in_time_settlement(
         if event_type == "cash_flow":
             if not math.isfinite(cash_amount) or cash_amount <= 0:
                 raise ValueError("settlement cash flows must be finite and positive")
-            if currency != price_currency:
-                raise ValueError("settlement cash flows must use the declared price_currency")
+            if not isinstance(currency, str) or CURRENCY_RE.fullmatch(currency) is None:
+                raise ValueError("settlement cash-flow currency must be an uppercase ISO 4217 code")
         elif cash_amount != 0 or currency is not None:
             raise ValueError("settlement closeout must declare zero cash and no currency")
 
@@ -209,12 +260,76 @@ def load_point_in_time_settlement(
         or (cash_flows["effective_at"] > closeout_timestamp).any()
     ):
         raise ValueError("settlement cash flows must occur after market data and by closeout")
-    total_cash_amount = math.fsum(float(value) for value in cash_flows["cash_amount"])
+    required_fx_pairs = {
+        (row.currency, price_currency)
+        for row in cash_flows.itertuples(index=False)
+        if row.currency != price_currency
+    }
+    cash_currencies = {base for base, _ in required_fx_pairs}
+    if cash_currencies.intersection(fx_bridge_currencies):
+        raise ValueError("a settlement cash-flow currency cannot also be an FX bridge currency")
+    allowed_fx_pairs = set(required_fx_pairs)
+    for base, quote in required_fx_pairs:
+        for bridge in fx_bridge_currencies:
+            allowed_fx_pairs.add((base, bridge))
+            allowed_fx_pairs.add((bridge, quote))
+    if required_fx_pairs and fx_rates_path is None:
+        raise ValueError("foreign-currency settlement cash flows require a settlement FX-rate CSV")
+    if not required_fx_pairs and fx_rates_path is not None:
+        raise ValueError(
+            "settlement FX-rate CSV is not allowed without a foreign-currency cash flow"
+        )
+    fx_book = (
+        load_fx_rate_book(fx_rates_path, cutoff=cutoff, allowed_pairs=allowed_fx_pairs)
+        if fx_rates_path is not None
+        else None
+    )
+    converted_by_event: dict[str, dict[str, object]] = {}
+    converted_cash_amounts: list[float] = []
+    used_fx_pairs: set[tuple[str, str]] = set()
+    observed_leg_skews: list[float] = []
+    for row in cash_flows.itertuples(index=False):
+        converted_cash_amount = float(row.cash_amount)
+        if row.currency != price_currency:
+            if fx_book is None:  # guarded above; retained as a fail-closed invariant
+                raise ValueError("foreign-currency settlement cash flow has no FX-rate book")
+            fx_rate, fx_legs, observed_leg_skew = fx_book.resolve(
+                row.currency,
+                price_currency,
+                row.effective_at,
+                fx_age,
+                fx_leg_skew,
+                fx_bridge_currencies,
+                context="settlement cash flow",
+            )
+            used_fx_pairs.update((leg["base_currency"], leg["quote_currency"]) for leg in fx_legs)
+            observed_leg_skews.append(observed_leg_skew)
+            converted_cash_amount *= fx_rate
+            converted_by_event[row.event_id] = {
+                "fx_rate": fx_rate,
+                "fx_leg_skew_seconds": observed_leg_skew,
+                "fx_route": [
+                    {
+                        "base_currency": leg["base_currency"],
+                        "quote_currency": leg["quote_currency"],
+                        "observed_at": leg["observed_at"].isoformat(),
+                        "available_at": leg["available_at"].isoformat(),
+                        "revision_id": leg["revision_id"],
+                        "rate": leg["rate"],
+                    }
+                    for leg in fx_legs
+                ],
+                "converted_cash_amount": converted_cash_amount,
+            }
+        converted_cash_amounts.append(converted_cash_amount)
+    if fx_book is not None and fx_book.supplied_pairs != used_fx_pairs:
+        raise ValueError("settlement FX-rate CSV contains unused or incomplete route pairs")
+    total_cash_amount = math.fsum(converted_cash_amounts)
     if not math.isfinite(total_cash_amount):
         raise ValueError("settlement total cash amount must be finite")
 
-    def record(row: Any) -> dict[str, object]:
-        return {
+    def record(row: Any, *, include_conversion: bool) -> dict[str, object]:
+        payload: dict[str, object] = {
             "event_id": row.event_id,
             "symbol": row.symbol,
             "event_type": row.event_type,
@@ -224,9 +339,16 @@ def load_point_in_time_settlement(
             "cash_amount": row.cash_amount,
             "currency": row.currency if isinstance(row.currency, str) else None,
         }
+        if include_conversion:
+            payload.update(converted_by_event.get(row.event_id, {}))
+        return payload
 
-    selected_payload = [record(row) for row in selected.itertuples(index=False)]
-    lineage_payload = [record(row) for row in identity.itertuples(index=False)]
+    selected_payload = [
+        record(row, include_conversion=True) for row in selected.itertuples(index=False)
+    ]
+    lineage_payload = [
+        record(row, include_conversion=False) for row in identity.itertuples(index=False)
+    ]
     return SettlementSnapshot(
         as_of=cutoff.isoformat(),
         symbol=symbol,
@@ -241,10 +363,29 @@ def load_point_in_time_settlement(
         superseded_revisions=len(eligible) - len(selected),
         closeout_at=closeout_timestamp.isoformat(),
         total_cash_amount=total_cash_amount,
+        fx_source_name=fx_book.source_name if fx_book else None,
+        fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
+        fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
+        fx_observed_max_leg_skew_seconds=max(observed_leg_skews, default=0.0) if fx_book else None,
+        fx_bridge_currencies=fx_bridge_currencies if fx_book else (),
+        fx_routes=len(converted_by_event),
+        fx_raw_rows=fx_book.raw_rows if fx_book else 0,
+        fx_eligible_revisions=fx_book.eligible_revisions if fx_book else 0,
+        fx_selected_observations=len(fx_book.selected) if fx_book else 0,
+        fx_excluded_unavailable_revisions=(
+            fx_book.excluded_unavailable_revisions if fx_book else 0
+        ),
+        fx_superseded_revisions=fx_book.superseded_revisions if fx_book else 0,
+        fx_lineage_sha256=fx_book.lineage_sha256 if fx_book else None,
         selected_events_sha256=_digest(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "as_of": cutoff.isoformat(),
+                "price_currency": price_currency,
+                "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
+                "fx_max_age_seconds": fx_age.total_seconds() if fx_book else None,
+                "fx_max_leg_skew_seconds": fx_leg_skew.total_seconds() if fx_book else None,
+                "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
                 "selection": "latest_available_revision_then_effective_closeout",
                 "events": selected_payload,
             }

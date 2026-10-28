@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--settlement-ledger-csv",
         type=Path,
-        help="revision-bearing same-currency cash flows ending in an explicit delisting closeout",
+        help="revision-bearing cash flows ending in an explicit delisting closeout",
+    )
+    parser.add_argument(
+        "--settlement-fx-rates-csv",
+        type=Path,
+        help="separately governed revision-bearing FX rates for settlement cash flows",
     )
     parser.add_argument(
         "--max-fx-age-hours",
@@ -85,6 +90,24 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="explicit directed two-leg FX bridge currency; repeatable",
+    )
+    parser.add_argument(
+        "--settlement-max-fx-age-hours",
+        type=_positive_float,
+        default=168.0,
+        help="maximum settlement FX observation age at each cash-flow time (default: 168)",
+    )
+    parser.add_argument(
+        "--settlement-max-fx-leg-skew-hours",
+        type=_positive_float,
+        default=1.0,
+        help="maximum settlement FX route-leg observation skew (default: 1)",
+    )
+    parser.add_argument(
+        "--settlement-fx-bridge-currency",
+        action="append",
+        default=[],
+        help="explicit directed two-leg bridge for settlement FX; repeatable",
     )
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
@@ -105,8 +128,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--fx-rates-csv requires --corporate-actions-csv")
     if args.settlement_ledger_csv is not None and args.corporate_actions_csv is None:
         parser.error("--settlement-ledger-csv requires --corporate-actions-csv")
+    if args.settlement_fx_rates_csv is not None and args.settlement_ledger_csv is None:
+        parser.error("--settlement-fx-rates-csv requires --settlement-ledger-csv")
     if args.fx_bridge_currency and args.fx_rates_csv is None:
         parser.error("--fx-bridge-currency requires --fx-rates-csv")
+    if args.settlement_fx_bridge_currency and args.settlement_fx_rates_csv is None:
+        parser.error("--settlement-fx-bridge-currency requires --settlement-fx-rates-csv")
     if args.corporate_actions_csv is not None and (args.csv is None or args.as_of is None):
         parser.error("corporate actions require --csv and --as-of")
 
@@ -136,9 +163,13 @@ def main(argv: list[str] | None = None) -> int:
                     price_currency=args.price_currency,
                     fx_rates_path=args.fx_rates_csv,
                     settlement_ledger_path=args.settlement_ledger_csv,
+                    settlement_fx_rates_path=args.settlement_fx_rates_csv,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
                     max_fx_leg_skew=f"{args.max_fx_leg_skew_hours} hours",
                     fx_bridge_currencies=tuple(args.fx_bridge_currency),
+                    settlement_max_fx_age=f"{args.settlement_max_fx_age_hours} hours",
+                    settlement_max_fx_leg_skew=(f"{args.settlement_max_fx_leg_skew_hours} hours"),
+                    settlement_fx_bridge_currencies=tuple(args.settlement_fx_bridge_currency),
                 )
             except (TypeError, ValueError) as exc:
                 parser.error(str(exc))

@@ -99,10 +99,17 @@ def _build_evidence(
                 "effective at the cutoff."
             )
         if action_snapshot["settlement"] is not None:
-            snapshot_claims.append(
-                "Terminal recovery sums only same-currency settlement cash-flow revisions "
-                "known and effective by an explicit closeout."
-            )
+            settlement = action_snapshot["settlement"]
+            if settlement["fx_source_name"]:
+                snapshot_claims.append(
+                    "Terminal recovery converts each foreign-currency settlement cash flow "
+                    "at its own effective timestamp using separately governed FX revisions."
+                )
+            else:
+                snapshot_claims.append(
+                    "Terminal recovery sums only settlement cash-flow revisions known and "
+                    "effective by an explicit closeout."
+                )
         if action_snapshot["terminal_zero_recovery"]:
             snapshot_claims.append(
                 "A zero terminal close is admitted only for an explicit point-in-time "
@@ -124,7 +131,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 11,
+        "schema_version": 12,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
