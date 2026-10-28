@@ -96,6 +96,47 @@ def delisting_actions_csv(tmp_path, market_path, currency="USD", recovery_ratio=
     return path
 
 
+def settlement_ledger_csv(tmp_path, market_path):
+    timestamps = pd.to_datetime(pd.read_csv(market_path)["timestamp"], utc=True)
+    path = tmp_path / "settlement-vintages.csv"
+    closeout = timestamps.iloc[-1] + pd.Timedelta(hours=1)
+    pd.DataFrame(
+        [
+            {
+                "event_id": "cash-a",
+                "symbol": "ACME",
+                "event_type": "cash_flow",
+                "effective_at": timestamps.iloc[-1] + pd.Timedelta(minutes=15),
+                "available_at": timestamps.iloc[-1] + pd.Timedelta(minutes=20),
+                "revision_id": "vendor-r1",
+                "cash_amount": 20.0,
+                "currency": "USD",
+            },
+            {
+                "event_id": "cash-b",
+                "symbol": "ACME",
+                "event_type": "cash_flow",
+                "effective_at": timestamps.iloc[-1] + pd.Timedelta(minutes=30),
+                "available_at": timestamps.iloc[-1] + pd.Timedelta(minutes=35),
+                "revision_id": "vendor-r1",
+                "cash_amount": 10.0,
+                "currency": "USD",
+            },
+            {
+                "event_id": "closeout",
+                "symbol": "ACME",
+                "event_type": "closeout",
+                "effective_at": closeout,
+                "available_at": closeout,
+                "revision_id": "vendor-r1",
+                "cash_amount": 0.0,
+                "currency": "",
+            },
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
 def fx_rates_csv(tmp_path, market_path):
     timestamps = pd.to_datetime(pd.read_csv(market_path)["timestamp"], utc=True)
     path = tmp_path / "fx-vintages.csv"
@@ -270,7 +311,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 10
+    assert evidence["schema_version"] == 11
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -305,7 +346,7 @@ def test_cli_binds_cash_delisting_terminal_payout_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 10
+    assert evidence["schema_version"] == 11
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert evidence["dataset"]["raw_observations"] == 340
     assert evidence["dataset"]["adjusted_observations"] == 341
@@ -342,10 +383,48 @@ def test_cli_binds_zero_recovery_without_accepting_ordinary_zero_prices(tmp_path
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 10
+    assert evidence["schema_version"] == 11
     assert snapshot["terminal_zero_recovery"] is True
     assert snapshot["fx_source_name"] is None
     assert any("zero terminal close" in claim for claim in evidence["claims"])
+
+
+def test_cli_binds_revision_aware_settlement_to_evidence(tmp_path):
+    source, as_of = vintage_market_csv(tmp_path)
+    actions = delisting_actions_csv(tmp_path, source, recovery_ratio=0.0)
+    settlements = settlement_ledger_csv(tmp_path, source)
+    output = tmp_path / "settlement-evidence"
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(source),
+                "--as-of",
+                as_of,
+                "--corporate-actions-csv",
+                str(actions),
+                "--settlement-ledger-csv",
+                str(settlements),
+                "--symbol",
+                "ACME",
+                "--price-currency",
+                "USD",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    settlement = evidence["dataset"]["corporate_actions"]["settlement"]
+    assert evidence["schema_version"] == 11
+    assert settlement["total_cash_amount"] == 30.0
+    assert settlement["applied_cash_flows"] == 2
+    assert len(settlement["lineage_sha256"]) == 64
+    assert any("settlement cash-flow revisions" in claim for claim in evidence["claims"])
 
 
 def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):
@@ -441,6 +520,7 @@ def test_cli_binds_declared_fx_bridge_route_to_evidence(tmp_path):
         ["--price-currency", "USD"],
         ["--fx-rates-csv", "fx.csv"],
         ["--fx-bridge-currency", "GBP"],
+        ["--settlement-ledger-csv", "settlement.csv"],
     ],
 )
 def test_cli_requires_complete_point_in_time_action_configuration(arguments):
