@@ -12,7 +12,7 @@ import pandas as pd
 
 from .data import _utc_cutoff
 from .fx import load_fx_rate_book
-from .rate_curves import load_rate_curve_book
+from .rate_curves import load_rate_curve_book, year_fraction
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$")
@@ -64,6 +64,8 @@ class SettlementSnapshot:
     fx_lineage_sha256: str | None
     rate_source_name: str | None
     rate_curve_id: str | None
+    rate_calendar_id: str | None
+    rate_day_count: str | None
     rate_max_age_seconds: float | None
     rate_observed_max_age_seconds: float | None
     rate_raw_rows: int
@@ -105,6 +107,8 @@ class SettlementSnapshot:
             "fx_lineage_sha256": self.fx_lineage_sha256,
             "rate_source_name": self.rate_source_name,
             "rate_curve_id": self.rate_curve_id,
+            "rate_calendar_id": self.rate_calendar_id,
+            "rate_day_count": self.rate_day_count,
             "rate_max_age_seconds": self.rate_max_age_seconds,
             "rate_observed_max_age_seconds": self.rate_observed_max_age_seconds,
             "rate_raw_rows": self.rate_raw_rows,
@@ -180,7 +184,7 @@ def load_point_in_time_settlement(
 
     Each foreign-currency payment is converted at its own effective timestamp. When a
     separately governed zero curve is supplied, converted payments are carried to the
-    closeout timestamp using ACT/365F continuous compounding.
+    closeout timestamp using the curve's governed ACT/360 or ACT/365F convention.
     """
 
     if not isinstance(symbol, str) or SYMBOL_RE.fullmatch(symbol) is None:
@@ -367,8 +371,11 @@ def load_point_in_time_settlement(
         if rate_book is not None and row.effective_at < closeout_timestamp:
             tenor_days = (closeout_timestamp - row.effective_at).total_seconds() / 86_400.0
             curve = rate_book.resolve(row.effective_at, tenor_days, rate_age)
+            accrual_year_fraction = year_fraction(
+                row.effective_at, closeout_timestamp, curve.day_count
+            )
             try:
-                accumulation_factor = math.exp(curve.zero_rate * tenor_days / 365.0)
+                accumulation_factor = math.exp(curve.zero_rate * accrual_year_fraction)
             except OverflowError as exc:
                 raise ValueError("settlement rate-curve accumulation factor is not finite") from exc
             if not math.isfinite(accumulation_factor):
@@ -381,7 +388,9 @@ def load_point_in_time_settlement(
             converted_by_event.setdefault(row.event_id, {}).update(
                 {
                     "rate_curve": curve.metadata(),
-                    "day_count": "ACT/365F",
+                    "calendar_id": curve.calendar_id,
+                    "day_count": curve.day_count,
+                    "year_fraction": accrual_year_fraction,
                     "compounding": "continuous",
                     "accumulation_factor": accumulation_factor,
                     "terminal_cash_amount": terminal_cash_amount,
@@ -447,6 +456,8 @@ def load_point_in_time_settlement(
         fx_lineage_sha256=fx_book.lineage_sha256 if fx_book else None,
         rate_source_name=rate_book.source_name if rate_book else None,
         rate_curve_id=rate_book.curve_id if rate_book else None,
+        rate_calendar_id=rate_book.calendar_id if rate_book else None,
+        rate_day_count=rate_book.day_count if rate_book else None,
         rate_max_age_seconds=rate_age.total_seconds() if rate_book else None,
         rate_observed_max_age_seconds=max(observed_rate_ages, default=0.0) if rate_book else None,
         rate_raw_rows=rate_book.raw_rows if rate_book else 0,
@@ -457,7 +468,7 @@ def load_point_in_time_settlement(
         rate_lineage_sha256=rate_book.lineage_sha256 if rate_book else None,
         selected_events_sha256=_digest(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "as_of": cutoff.isoformat(),
                 "price_currency": price_currency,
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
@@ -466,7 +477,8 @@ def load_point_in_time_settlement(
                 "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
                 "rate_lineage_sha256": rate_book.lineage_sha256 if rate_book else None,
                 "rate_max_age_seconds": rate_age.total_seconds() if rate_book else None,
-                "rate_day_count": "ACT/365F" if rate_book else None,
+                "rate_calendar_id": rate_book.calendar_id if rate_book else None,
+                "rate_day_count": rate_book.day_count if rate_book else None,
                 "rate_compounding": "continuous" if rate_book else None,
                 "selection": "latest_available_revision_then_effective_closeout",
                 "events": selected_payload,

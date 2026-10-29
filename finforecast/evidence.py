@@ -103,8 +103,8 @@ def _build_evidence(
             if settlement["rate_source_name"]:
                 snapshot_claims.append(
                     "Terminal recovery carries each converted settlement cash flow to closeout "
-                    "using a revision-aware price-currency zero curve, ACT/365F and continuous "
-                    "compounding."
+                    "using a revision-aware price-currency zero curve, governed "
+                    f"{settlement['rate_day_count']} day count and continuous compounding."
                 )
             if settlement["fx_source_name"]:
                 snapshot_claims.append(
@@ -137,7 +137,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 13,
+        "schema_version": 14,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
