@@ -221,6 +221,8 @@ finforecast \
   --corporate-actions-csv delisting-vintages.csv \
   --settlement-ledger-csv settlement-vintages.csv \
   --settlement-fx-rates-csv settlement-fx-vintages.csv \
+  --settlement-rate-curve-csv settlement-rate-curves.csv \
+  --settlement-max-rate-age-hours 24 \
   --symbol ACME \
   --price-currency USD \
   --evidence \
@@ -238,20 +240,32 @@ Foreign cash flows require the separate `--settlement-fx-rates-csv` feed. The st
 silently reused: settlement conversion has independent `--settlement-max-fx-age-hours`,
 `--settlement-max-fx-leg-skew-hours`, and repeatable `--settlement-fx-bridge-currency` policy. Each
 cash flow selects the latest admissible direct or declared two-leg route at that cash flow's own
-`effective_at`; a later closeout-date quote cannot be reused for an earlier payment. The synthetic
-terminal close is the undiscounted sum in the instrument's price currency:
+`effective_at`; a later closeout-date quote cannot be reused for an earlier payment.
+
+An optional, separately governed `--settlement-rate-curve-csv` carries converted payments to the
+closeout timestamp. Its strict schema is
+`curve_id,currency,observed_at,available_at,revision_id,tenor_days,zero_rate`. The feed must contain
+one price-currency curve with complete tenor shapes across revisions. For each pre-closeout payment,
+the latest curve observation at or before that payment is selected from revisions known by
+`--as-of`; rates are linearly interpolated in tenor without extrapolation. Curve observations older
+than `--settlement-max-rate-age-hours` fail closed. The terminal close uses ACT/365F and continuous
+compounding:
 
 ```text
-terminal_close = sum(cash_amount_i * product(route_leg_rates_at_effective_at_i))
+converted_i = cash_amount_i * product(route_leg_rates_at_effective_at_i)
+terminal_close = sum(converted_i * exp(zero_rate_i(tenor_i) * tenor_days_i / 365))
 ```
 
 Evidence binds selection counts, total cash, closeout time, selected-event digest, complete lineage
-digest, FX revision lineage and route metadata, and the resulting market fingerprint. Unknown
+digest, FX revision lineage and route metadata, rate-curve lineage, interpolation brackets,
+day-count and compounding conventions, and the resulting market fingerprint. Unknown
 columns, mixed symbols, event-type changes, missing or non-terminal closeout, undeclared/unused FX
-routes, stale or future-only quotes, pre-delisting cash flows, and a non-zero direct delisting payout
-fail closed. This contract intentionally does not model discounting, reinvestment, withholding tax,
-execution spreads, non-cash consideration, or distributions announced after the governed cutoff.
-Vendor availability timestamps and ISO currency labels remain external governance dependencies.
+routes, stale or future-only quotes/curves, curve extrapolation, pre-delisting cash flows, and a
+non-zero direct delisting payout fail closed. With no curve, the backward-compatible factor is one.
+This contract does not model withholding tax, execution spreads, non-cash consideration, calendar-
+adjusted day counts, collateral/funding basis, or distributions announced after the governed cutoff.
+Vendor availability timestamps, curve construction, and ISO currency labels remain external
+governance dependencies.
 
 ## Promotion policy
 

@@ -74,6 +74,11 @@ def main(argv: list[str] | None = None) -> int:
         help="separately governed revision-bearing FX rates for settlement cash flows",
     )
     parser.add_argument(
+        "--settlement-rate-curve-csv",
+        type=Path,
+        help="revision-bearing price-currency zero curves for carrying cash to closeout",
+    )
+    parser.add_argument(
         "--max-fx-age-hours",
         type=_positive_float,
         default=168.0,
@@ -109,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="explicit directed two-leg bridge for settlement FX; repeatable",
     )
+    parser.add_argument(
+        "--settlement-max-rate-age-hours",
+        type=_positive_float,
+        default=168.0,
+        help="maximum zero-curve observation age at each cash-flow time (default: 168)",
+    )
     volume = parser.add_mutually_exclusive_group()
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
@@ -130,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--settlement-ledger-csv requires --corporate-actions-csv")
     if args.settlement_fx_rates_csv is not None and args.settlement_ledger_csv is None:
         parser.error("--settlement-fx-rates-csv requires --settlement-ledger-csv")
+    if args.settlement_rate_curve_csv is not None and args.settlement_ledger_csv is None:
+        parser.error("--settlement-rate-curve-csv requires --settlement-ledger-csv")
     if args.fx_bridge_currency and args.fx_rates_csv is None:
         parser.error("--fx-bridge-currency requires --fx-rates-csv")
     if args.settlement_fx_bridge_currency and args.settlement_fx_rates_csv is None:
@@ -164,12 +177,14 @@ def main(argv: list[str] | None = None) -> int:
                     fx_rates_path=args.fx_rates_csv,
                     settlement_ledger_path=args.settlement_ledger_csv,
                     settlement_fx_rates_path=args.settlement_fx_rates_csv,
+                    settlement_rate_curve_path=args.settlement_rate_curve_csv,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
                     max_fx_leg_skew=f"{args.max_fx_leg_skew_hours} hours",
                     fx_bridge_currencies=tuple(args.fx_bridge_currency),
                     settlement_max_fx_age=f"{args.settlement_max_fx_age_hours} hours",
                     settlement_max_fx_leg_skew=(f"{args.settlement_max_fx_leg_skew_hours} hours"),
                     settlement_fx_bridge_currencies=tuple(args.settlement_fx_bridge_currency),
+                    settlement_max_rate_age=(f"{args.settlement_max_rate_age_hours} hours"),
                 )
             except (TypeError, ValueError) as exc:
                 parser.error(str(exc))

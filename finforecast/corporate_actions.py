@@ -159,12 +159,14 @@ def _apply_point_in_time_actions(
     fx_rates_path: str | Path | None,
     settlement_ledger_path: str | Path | None,
     settlement_fx_rates_path: str | Path | None,
+    settlement_rate_curve_path: str | Path | None,
     max_fx_age: object,
     max_fx_leg_skew: object,
     fx_bridge_currencies: tuple[str, ...],
     settlement_max_fx_age: object,
     settlement_max_fx_leg_skew: object,
     settlement_fx_bridge_currencies: tuple[str, ...],
+    settlement_max_rate_age: object,
     allowed_action_types: frozenset[str],
     action_id_column: str = "action_id",
     symbol_column: str = "symbol",
@@ -346,9 +348,11 @@ def _apply_point_in_time_actions(
             max_fx_age=settlement_max_fx_age,
             max_fx_leg_skew=settlement_max_fx_leg_skew,
             fx_bridge_currencies=settlement_fx_bridge_currencies,
+            rate_curve_path=settlement_rate_curve_path,
+            max_rate_age=settlement_max_rate_age,
         )
-    elif settlement_fx_rates_path is not None:
-        raise ValueError("settlement FX-rate CSV requires a settlement ledger")
+    elif settlement_fx_rates_path is not None or settlement_rate_curve_path is not None:
+        raise ValueError("settlement FX/rate-curve CSV requires a settlement ledger")
     required_fx_pairs = {
         (row.currency, price_currency)
         for row in applied.itertuples(index=False)
@@ -559,7 +563,7 @@ def _apply_point_in_time_actions(
         selected_actions_sha256=_digest(selected_payload),
         lineage_sha256=_digest(
             {
-                "schema_version": 9,
+                "schema_version": 10,
                 "as_of": cutoff.isoformat(),
                 "symbol": symbol,
                 "price_currency": price_currency,
@@ -570,6 +574,9 @@ def _apply_point_in_time_actions(
                 "settlement_lineage_sha256": settlement.lineage_sha256 if settlement else None,
                 "settlement_fx_lineage_sha256": (
                     settlement.fx_lineage_sha256 if settlement else None
+                ),
+                "settlement_rate_lineage_sha256": (
+                    settlement.rate_lineage_sha256 if settlement else None
                 ),
                 "selection": "latest_available_revision_then_effective_action",
                 "rows": lineage_payload,
@@ -596,12 +603,14 @@ def apply_point_in_time_corporate_actions(
     fx_rates_path: str | Path | None = None,
     settlement_ledger_path: str | Path | None = None,
     settlement_fx_rates_path: str | Path | None = None,
+    settlement_rate_curve_path: str | Path | None = None,
     max_fx_age: object = "7 days",
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
     settlement_max_fx_age: object = "7 days",
     settlement_max_fx_leg_skew: object = "1 hour",
     settlement_fx_bridge_currencies: tuple[str, ...] = (),
+    settlement_max_rate_age: object = "7 days",
 ) -> MarketData:
     """Apply point-in-time splits, dividends, and terminal cash delistings."""
 
@@ -614,12 +623,14 @@ def apply_point_in_time_corporate_actions(
         fx_rates_path=fx_rates_path,
         settlement_ledger_path=settlement_ledger_path,
         settlement_fx_rates_path=settlement_fx_rates_path,
+        settlement_rate_curve_path=settlement_rate_curve_path,
         max_fx_age=max_fx_age,
         max_fx_leg_skew=max_fx_leg_skew,
         fx_bridge_currencies=fx_bridge_currencies,
         settlement_max_fx_age=settlement_max_fx_age,
         settlement_max_fx_leg_skew=settlement_max_fx_leg_skew,
         settlement_fx_bridge_currencies=settlement_fx_bridge_currencies,
+        settlement_max_rate_age=settlement_max_rate_age,
         allowed_action_types=SUPPORTED_ACTION_TYPES,
     )
 
@@ -642,11 +653,13 @@ def apply_point_in_time_splits(
         fx_rates_path=None,
         settlement_ledger_path=None,
         settlement_fx_rates_path=None,
+        settlement_rate_curve_path=None,
         max_fx_age="7 days",
         max_fx_leg_skew="1 hour",
         fx_bridge_currencies=(),
         settlement_max_fx_age="7 days",
         settlement_max_fx_leg_skew="1 hour",
         settlement_fx_bridge_currencies=(),
+        settlement_max_rate_age="7 days",
         allowed_action_types=frozenset({"split"}),
     )

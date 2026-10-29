@@ -100,6 +100,12 @@ def _build_evidence(
             )
         if action_snapshot["settlement"] is not None:
             settlement = action_snapshot["settlement"]
+            if settlement["rate_source_name"]:
+                snapshot_claims.append(
+                    "Terminal recovery carries each converted settlement cash flow to closeout "
+                    "using a revision-aware price-currency zero curve, ACT/365F and continuous "
+                    "compounding."
+                )
             if settlement["fx_source_name"]:
                 snapshot_claims.append(
                     "Terminal recovery converts each foreign-currency settlement cash flow "
@@ -131,7 +137,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 12,
+        "schema_version": 13,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

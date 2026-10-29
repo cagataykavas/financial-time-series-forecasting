@@ -12,6 +12,7 @@ import pandas as pd
 
 from .data import _utc_cutoff
 from .fx import load_fx_rate_book
+from .rate_curves import load_rate_curve_book
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$")
@@ -48,6 +49,7 @@ class SettlementSnapshot:
     superseded_revisions: int
     closeout_at: str
     total_cash_amount: float
+    nominal_cash_amount: float
     fx_source_name: str | None
     fx_max_age_seconds: float | None
     fx_max_leg_skew_seconds: float | None
@@ -60,6 +62,16 @@ class SettlementSnapshot:
     fx_excluded_unavailable_revisions: int
     fx_superseded_revisions: int
     fx_lineage_sha256: str | None
+    rate_source_name: str | None
+    rate_curve_id: str | None
+    rate_max_age_seconds: float | None
+    rate_observed_max_age_seconds: float | None
+    rate_raw_rows: int
+    rate_eligible_rows: int
+    rate_selected_curves: int
+    rate_excluded_unavailable_rows: int
+    rate_superseded_revisions: int
+    rate_lineage_sha256: str | None
     selected_events_sha256: str
     lineage_sha256: str
 
@@ -78,6 +90,7 @@ class SettlementSnapshot:
             "superseded_revisions": self.superseded_revisions,
             "closeout_at": self.closeout_at,
             "total_cash_amount": self.total_cash_amount,
+            "nominal_cash_amount": self.nominal_cash_amount,
             "fx_source_name": self.fx_source_name,
             "fx_max_age_seconds": self.fx_max_age_seconds,
             "fx_max_leg_skew_seconds": self.fx_max_leg_skew_seconds,
@@ -90,6 +103,16 @@ class SettlementSnapshot:
             "fx_excluded_unavailable_revisions": self.fx_excluded_unavailable_revisions,
             "fx_superseded_revisions": self.fx_superseded_revisions,
             "fx_lineage_sha256": self.fx_lineage_sha256,
+            "rate_source_name": self.rate_source_name,
+            "rate_curve_id": self.rate_curve_id,
+            "rate_max_age_seconds": self.rate_max_age_seconds,
+            "rate_observed_max_age_seconds": self.rate_observed_max_age_seconds,
+            "rate_raw_rows": self.rate_raw_rows,
+            "rate_eligible_rows": self.rate_eligible_rows,
+            "rate_selected_curves": self.rate_selected_curves,
+            "rate_excluded_unavailable_rows": self.rate_excluded_unavailable_rows,
+            "rate_superseded_revisions": self.rate_superseded_revisions,
+            "rate_lineage_sha256": self.rate_lineage_sha256,
             "selected_events_sha256": self.selected_events_sha256,
             "lineage_sha256": self.lineage_sha256,
         }
@@ -150,11 +173,14 @@ def load_point_in_time_settlement(
     max_fx_age: object = "7 days",
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
+    rate_curve_path: str | Path | None = None,
+    max_rate_age: object = "7 days",
 ) -> SettlementSnapshot:
     """Select the latest known settlement revisions and require an explicit closeout.
 
-    Cash flows are summed without discounting or reinvestment. Each foreign-currency
-    payment is converted at its own effective timestamp under a separate FX policy.
+    Each foreign-currency payment is converted at its own effective timestamp. When a
+    separately governed zero curve is supplied, converted payments are carried to the
+    closeout timestamp using ACT/365F continuous compounding.
     """
 
     if not isinstance(symbol, str) or SYMBOL_RE.fullmatch(symbol) is None:
@@ -173,6 +199,7 @@ def load_point_in_time_settlement(
         raise ValueError("price_currency cannot also be a settlement FX bridge currency")
     fx_age = _positive_duration(max_fx_age, "settlement max_fx_age")
     fx_leg_skew = _positive_duration(max_fx_leg_skew, "settlement max_fx_leg_skew")
+    rate_age = _positive_duration(max_rate_age, "settlement max_rate_age")
     cutoff = _utc_cutoff(as_of)
     market_timestamp = _utc_cutoff(market_end)
     closeout_timestamp = _utc_cutoff(expected_closeout_at)
@@ -284,10 +311,24 @@ def load_point_in_time_settlement(
         if fx_rates_path is not None
         else None
     )
+    rate_book = (
+        load_rate_curve_book(
+            rate_curve_path,
+            cutoff=cutoff,
+            expected_currency=price_currency,
+        )
+        if rate_curve_path is not None
+        else None
+    )
+    if rate_book is not None and not (cash_flows["effective_at"] < closeout_timestamp).any():
+        raise ValueError("settlement rate curve requires a cash flow before closeout")
     converted_by_event: dict[str, dict[str, object]] = {}
-    converted_cash_amounts: list[float] = []
+    nominal_cash_amounts: list[float] = []
+    terminal_cash_amounts: list[float] = []
     used_fx_pairs: set[tuple[str, str]] = set()
     observed_leg_skews: list[float] = []
+    observed_rate_ages: list[float] = []
+    selected_rate_curves: set[tuple[str, str, str]] = set()
     for row in cash_flows.itertuples(index=False):
         converted_cash_amount = float(row.cash_amount)
         if row.currency != price_currency:
@@ -321,10 +362,36 @@ def load_point_in_time_settlement(
                 ],
                 "converted_cash_amount": converted_cash_amount,
             }
-        converted_cash_amounts.append(converted_cash_amount)
+        nominal_cash_amounts.append(converted_cash_amount)
+        terminal_cash_amount = converted_cash_amount
+        if rate_book is not None and row.effective_at < closeout_timestamp:
+            tenor_days = (closeout_timestamp - row.effective_at).total_seconds() / 86_400.0
+            curve = rate_book.resolve(row.effective_at, tenor_days, rate_age)
+            try:
+                accumulation_factor = math.exp(curve.zero_rate * tenor_days / 365.0)
+            except OverflowError as exc:
+                raise ValueError("settlement rate-curve accumulation factor is not finite") from exc
+            if not math.isfinite(accumulation_factor):
+                raise ValueError("settlement rate-curve accumulation factor is not finite")
+            terminal_cash_amount *= accumulation_factor
+            observed_rate_ages.append(curve.observation_age_seconds)
+            selected_rate_curves.add(
+                (curve.observed_at.isoformat(), curve.available_at.isoformat(), curve.revision_id)
+            )
+            converted_by_event.setdefault(row.event_id, {}).update(
+                {
+                    "rate_curve": curve.metadata(),
+                    "day_count": "ACT/365F",
+                    "compounding": "continuous",
+                    "accumulation_factor": accumulation_factor,
+                    "terminal_cash_amount": terminal_cash_amount,
+                }
+            )
+        terminal_cash_amounts.append(terminal_cash_amount)
     if fx_book is not None and fx_book.supplied_pairs != used_fx_pairs:
         raise ValueError("settlement FX-rate CSV contains unused or incomplete route pairs")
-    total_cash_amount = math.fsum(converted_cash_amounts)
+    nominal_cash_amount = math.fsum(nominal_cash_amounts)
+    total_cash_amount = math.fsum(terminal_cash_amounts)
     if not math.isfinite(total_cash_amount):
         raise ValueError("settlement total cash amount must be finite")
 
@@ -363,6 +430,7 @@ def load_point_in_time_settlement(
         superseded_revisions=len(eligible) - len(selected),
         closeout_at=closeout_timestamp.isoformat(),
         total_cash_amount=total_cash_amount,
+        nominal_cash_amount=nominal_cash_amount,
         fx_source_name=fx_book.source_name if fx_book else None,
         fx_max_age_seconds=fx_age.total_seconds() if fx_book else None,
         fx_max_leg_skew_seconds=fx_leg_skew.total_seconds() if fx_book else None,
@@ -377,15 +445,29 @@ def load_point_in_time_settlement(
         ),
         fx_superseded_revisions=fx_book.superseded_revisions if fx_book else 0,
         fx_lineage_sha256=fx_book.lineage_sha256 if fx_book else None,
+        rate_source_name=rate_book.source_name if rate_book else None,
+        rate_curve_id=rate_book.curve_id if rate_book else None,
+        rate_max_age_seconds=rate_age.total_seconds() if rate_book else None,
+        rate_observed_max_age_seconds=max(observed_rate_ages, default=0.0) if rate_book else None,
+        rate_raw_rows=rate_book.raw_rows if rate_book else 0,
+        rate_eligible_rows=rate_book.eligible_rows if rate_book else 0,
+        rate_selected_curves=len(selected_rate_curves),
+        rate_excluded_unavailable_rows=(rate_book.excluded_unavailable_rows if rate_book else 0),
+        rate_superseded_revisions=rate_book.superseded_revisions if rate_book else 0,
+        rate_lineage_sha256=rate_book.lineage_sha256 if rate_book else None,
         selected_events_sha256=_digest(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "as_of": cutoff.isoformat(),
                 "price_currency": price_currency,
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
                 "fx_max_age_seconds": fx_age.total_seconds() if fx_book else None,
                 "fx_max_leg_skew_seconds": fx_leg_skew.total_seconds() if fx_book else None,
                 "fx_bridge_currencies": list(fx_bridge_currencies) if fx_book else [],
+                "rate_lineage_sha256": rate_book.lineage_sha256 if rate_book else None,
+                "rate_max_age_seconds": rate_age.total_seconds() if rate_book else None,
+                "rate_day_count": "ACT/365F" if rate_book else None,
+                "rate_compounding": "continuous" if rate_book else None,
                 "selection": "latest_available_revision_then_effective_closeout",
                 "events": selected_payload,
             }

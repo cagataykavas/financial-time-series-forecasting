@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -67,6 +68,34 @@ def write_fx(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
     path = tmp_path / "settlement-fx.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
     return path
+
+
+def write_curve(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
+    path = tmp_path / "settlement-rates.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def rate_curve_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for observed_at, available_at, revision_id, rates in [
+        ("2024-01-05T05:00:00Z", "2024-01-05T05:30:00Z", "morning-r1", (0.20, 0.365)),
+        ("2024-01-05T05:00:00Z", "2024-01-08T00:00:00Z", "morning-r2", (9.0, 9.0)),
+        ("2024-01-05T17:00:00Z", "2024-01-05T17:30:00Z", "evening-r1", (0.73, 0.90)),
+    ]:
+        for tenor_days, zero_rate in zip((0.25, 0.75), rates, strict=True):
+            rows.append(
+                {
+                    "curve_id": "USD-OIS",
+                    "currency": "USD",
+                    "observed_at": observed_at,
+                    "available_at": available_at,
+                    "revision_id": revision_id,
+                    "tenor_days": tenor_days,
+                    "zero_rate": zero_rate,
+                }
+            )
+    return rows
 
 
 def settlement_fx_rows() -> list[dict[str, object]]:
@@ -183,6 +212,92 @@ def test_converts_each_foreign_cash_flow_at_its_effective_timestamp(tmp_path: Pa
     assert settlement.fx_source_name == "settlement-fx.csv"
     assert settlement.fx_lineage_sha256 is not None
     assert adjusted.close.iloc[-1] == pytest.approx(29.0)
+
+
+def test_carries_each_cash_flow_to_closeout_with_point_in_time_zero_curve(
+    tmp_path: Path,
+) -> None:
+    settlement = settlement_rows()
+    settlement[0]["effective_at"] = "2024-01-05T12:00:00Z"
+    snapshot = load_point_in_time_settlement(
+        write_settlement(tmp_path, settlement),
+        as_of=AS_OF,
+        symbol="ACME",
+        price_currency="USD",
+        market_end=MARKET_END,
+        expected_closeout_at=CLOSEOUT,
+        rate_curve_path=write_curve(tmp_path, rate_curve_rows()),
+        max_rate_age="8 hours",
+    )
+
+    interpolated_rate = 0.20 + 0.5 * (0.365 - 0.20)
+    expected = 10.0 * math.exp(interpolated_rate * 0.5 / 365.0) + 15.0 * math.exp(
+        0.73 * 0.25 / 365.0
+    )
+    assert snapshot.nominal_cash_amount == 25.0
+    assert snapshot.total_cash_amount == pytest.approx(expected)
+    assert snapshot.rate_curve_id == "USD-OIS"
+    assert snapshot.rate_selected_curves == 2
+    assert snapshot.rate_excluded_unavailable_rows == 2
+    assert snapshot.rate_superseded_revisions == 0
+    assert snapshot.rate_lineage_sha256 is not None
+
+
+def test_rate_curve_interpolates_but_never_extrapolates(tmp_path: Path) -> None:
+    rows = rate_curve_rows()
+    for row in rows:
+        row["tenor_days"] = float(row["tenor_days"]) + 0.25
+
+    with pytest.raises(ValueError, match="forbidden extrapolation"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, rows),
+        )
+
+
+def test_rate_curve_enforces_currency_freshness_and_revision_shape(tmp_path: Path) -> None:
+    wrong_currency = rate_curve_rows()
+    wrong_currency[0]["currency"] = "EUR"
+    with pytest.raises(ValueError, match="price currency"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, wrong_currency),
+        )
+
+    with pytest.raises(ValueError, match="maximum age"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, rate_curve_rows()),
+            max_rate_age="30 minutes",
+        )
+
+    changed_shape = rate_curve_rows()
+    changed_shape[3]["tenor_days"] = 0.5
+    with pytest.raises(ValueError, match="change tenor shape"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, changed_shape),
+        )
 
 
 def test_does_not_reuse_a_later_quote_for_an_earlier_cash_flow(tmp_path: Path) -> None:
