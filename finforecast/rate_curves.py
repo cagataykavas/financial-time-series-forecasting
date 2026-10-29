@@ -12,10 +12,14 @@ import pandas as pd
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+SUPPORTED_DAY_COUNTS = frozenset({"ACT/360", "ACT/365F"})
+UNADJUSTED_CALENDAR_ID = "NONE"
 RATE_CURVE_COLUMNS = frozenset(
     {
         "curve_id",
         "currency",
+        "calendar_id",
+        "day_count",
         "observed_at",
         "available_at",
         "revision_id",
@@ -23,6 +27,18 @@ RATE_CURVE_COLUMNS = frozenset(
         "zero_rate",
     }
 )
+
+
+def year_fraction(start: pd.Timestamp, end: pd.Timestamp, day_count: str) -> float:
+    """Return an actual-time year fraction for a reviewed curve convention."""
+
+    if day_count not in SUPPORTED_DAY_COUNTS:
+        raise ValueError(f"unsupported settlement rate-curve day count: {day_count!r}")
+    elapsed_seconds = (end - start).total_seconds()
+    if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0:
+        raise ValueError("settlement rate-curve accrual interval must be finite and positive")
+    denominator_days = 360.0 if day_count == "ACT/360" else 365.0
+    return elapsed_seconds / (denominator_days * 86_400.0)
 
 
 def _digest(value: object) -> str:
@@ -52,6 +68,8 @@ def _timestamps(values: pd.Series, column: str) -> pd.DatetimeIndex:
 @dataclass(frozen=True)
 class RateCurveSelection:
     curve_id: str
+    calendar_id: str
+    day_count: str
     observed_at: pd.Timestamp
     available_at: pd.Timestamp
     revision_id: str
@@ -63,6 +81,8 @@ class RateCurveSelection:
     def metadata(self) -> dict[str, object]:
         return {
             "curve_id": self.curve_id,
+            "calendar_id": self.calendar_id,
+            "day_count": self.day_count,
             "observed_at": self.observed_at.isoformat(),
             "available_at": self.available_at.isoformat(),
             "revision_id": self.revision_id,
@@ -78,6 +98,8 @@ class RateCurveBook:
     source_name: str
     curve_id: str
     currency: str
+    calendar_id: str
+    day_count: str
     rows: pd.DataFrame
     cutoff: pd.Timestamp
     raw_rows: int
@@ -125,6 +147,8 @@ class RateCurveBook:
             zero_rate = rates[lower_index] + weight * (rates[upper_index] - rates[lower_index])
         return RateCurveSelection(
             curve_id=self.curve_id,
+            calendar_id=self.calendar_id,
+            day_count=self.day_count,
             observed_at=observed_at,
             available_at=available_at,
             revision_id=str(curve.iloc[0]["revision_id"]),
@@ -172,6 +196,16 @@ def load_rate_curve_book(
     currencies = frame["currency"].tolist()
     if any(value != expected_currency for value in currencies):
         raise ValueError("settlement rate curve must use the price currency")
+    calendar_ids = frame["calendar_id"].tolist()
+    if any(value != UNADJUSTED_CALENDAR_ID for value in calendar_ids):
+        raise ValueError(
+            "settlement rate-curve calendar_id must be NONE until calendar adjustment is supported"
+        )
+    day_counts = frame["day_count"].tolist()
+    if any(value not in SUPPORTED_DAY_COUNTS for value in day_counts):
+        raise ValueError("settlement rate-curve day_count must be ACT/360 or ACT/365F")
+    if len(set(day_counts)) != 1:
+        raise ValueError("settlement rate-curve CSV must contain exactly one day_count")
 
     observed_at = _timestamps(frame["observed_at"], "observed_at")
     available_at = _timestamps(frame["available_at"], "available_at")
@@ -188,6 +222,8 @@ def load_rate_curve_book(
         {
             "curve_id": curve_ids,
             "currency": currencies,
+            "calendar_id": calendar_ids,
+            "day_count": day_counts,
             "observed_at": observed_at,
             "available_at": available_at,
             "revision_id": revisions,
@@ -237,6 +273,8 @@ def load_rate_curve_book(
             {
                 "curve_id": row.curve_id,
                 "currency": row.currency,
+                "calendar_id": row.calendar_id,
+                "day_count": row.day_count,
                 "observed_at": row.observed_at.isoformat(),
                 "available_at": row.available_at.isoformat(),
                 "revision_id": row.revision_id,
@@ -248,6 +286,8 @@ def load_rate_curve_book(
         source_name=source.name,
         curve_id=curve_ids[0],
         currency=expected_currency,
+        calendar_id=calendar_ids[0],
+        day_count=day_counts[0],
         rows=selected,
         cutoff=cutoff,
         raw_rows=len(identity),
@@ -255,6 +295,6 @@ def load_rate_curve_book(
         excluded_unavailable_rows=int((~eligible_mask).sum()),
         superseded_revisions=superseded,
         lineage_sha256=_digest(
-            {"schema_version": 1, "as_of": cutoff.isoformat(), "rows": lineage_rows}
+            {"schema_version": 2, "as_of": cutoff.isoformat(), "rows": lineage_rows}
         ),
     )

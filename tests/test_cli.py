@@ -175,6 +175,8 @@ def settlement_rate_curve_csv(tmp_path, settlement_path):
                 {
                     "curve_id": "USD-OIS",
                     "currency": "USD",
+                    "calendar_id": "NONE",
+                    "day_count": "ACT/365F",
                     "observed_at": observed_at,
                     "available_at": available_at,
                     "revision_id": f"curve-{index}",
@@ -360,7 +362,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 13
+    assert evidence["schema_version"] == 14
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -395,7 +397,7 @@ def test_cli_binds_cash_delisting_terminal_payout_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 13
+    assert evidence["schema_version"] == 14
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert evidence["dataset"]["raw_observations"] == 340
     assert evidence["dataset"]["adjusted_observations"] == 341
@@ -432,7 +434,7 @@ def test_cli_binds_zero_recovery_without_accepting_ordinary_zero_prices(tmp_path
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 13
+    assert evidence["schema_version"] == 14
     assert snapshot["terminal_zero_recovery"] is True
     assert snapshot["fx_source_name"] is None
     assert any("zero terminal close" in claim for claim in evidence["claims"])
@@ -469,7 +471,7 @@ def test_cli_binds_revision_aware_settlement_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     settlement = evidence["dataset"]["corporate_actions"]["settlement"]
-    assert evidence["schema_version"] == 13
+    assert evidence["schema_version"] == 14
     assert settlement["total_cash_amount"] == 30.0
     assert settlement["applied_cash_flows"] == 2
     assert len(settlement["lineage_sha256"]) == 64
@@ -554,10 +556,12 @@ def test_cli_binds_revision_aware_settlement_curve_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     settlement = evidence["dataset"]["corporate_actions"]["settlement"]
-    assert evidence["schema_version"] == 13
+    assert evidence["schema_version"] == 14
     assert settlement["nominal_cash_amount"] == 30.0
     assert settlement["total_cash_amount"] > 30.0
     assert settlement["rate_curve_id"] == "USD-OIS"
+    assert settlement["rate_calendar_id"] == "NONE"
+    assert settlement["rate_day_count"] == "ACT/365F"
     assert settlement["rate_selected_curves"] == 2
     assert len(settlement["rate_lineage_sha256"]) == 64
     assert any("revision-aware price-currency zero curve" in claim for claim in evidence["claims"])

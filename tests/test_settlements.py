@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 from finforecast.corporate_actions import apply_point_in_time_corporate_actions
 from finforecast.data import load_market_csv
+from finforecast.rate_curves import year_fraction
 from finforecast.settlements import load_point_in_time_settlement
 
 AS_OF = "2024-01-07T00:00:00Z"
@@ -88,6 +90,8 @@ def rate_curve_rows() -> list[dict[str, object]]:
                 {
                     "curve_id": "USD-OIS",
                     "currency": "USD",
+                    "calendar_id": "NONE",
+                    "day_count": "ACT/365F",
                     "observed_at": observed_at,
                     "available_at": available_at,
                     "revision_id": revision_id,
@@ -237,6 +241,8 @@ def test_carries_each_cash_flow_to_closeout_with_point_in_time_zero_curve(
     assert snapshot.nominal_cash_amount == 25.0
     assert snapshot.total_cash_amount == pytest.approx(expected)
     assert snapshot.rate_curve_id == "USD-OIS"
+    assert snapshot.rate_calendar_id == "NONE"
+    assert snapshot.rate_day_count == "ACT/365F"
     assert snapshot.rate_selected_curves == 2
     assert snapshot.rate_excluded_unavailable_rows == 2
     assert snapshot.rate_superseded_revisions == 0
@@ -297,6 +303,88 @@ def test_rate_curve_enforces_currency_freshness_and_revision_shape(tmp_path: Pat
             market_end=MARKET_END,
             expected_closeout_at=CLOSEOUT,
             rate_curve_path=write_curve(tmp_path, changed_shape),
+        )
+
+
+def test_rate_curve_day_counts_match_high_precision_golden_vectors() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "settlement_day_count_vectors.json"
+    vectors = json.loads(fixture.read_text(encoding="utf-8"))
+
+    for vector in vectors:
+        start = pd.Timestamp(vector["start"])
+        end = pd.Timestamp(vector["end"])
+        fraction = year_fraction(start, end, vector["day_count"])
+        factor = math.exp(float(vector["zero_rate"]) * fraction)
+        assert fraction == pytest.approx(float(vector["year_fraction"]), abs=1e-15)
+        assert factor == pytest.approx(float(vector["accumulation_factor"]), abs=1e-15)
+
+
+def test_settlement_uses_curve_declared_act_360(tmp_path: Path) -> None:
+    rows = rate_curve_rows()
+    for row in rows:
+        row["day_count"] = "ACT/360"
+    settlements = settlement_rows()
+    settlements[0]["effective_at"] = "2024-01-05T12:00:00Z"
+
+    snapshot = load_point_in_time_settlement(
+        write_settlement(tmp_path, settlements),
+        as_of=AS_OF,
+        symbol="ACME",
+        price_currency="USD",
+        market_end=MARKET_END,
+        expected_closeout_at=CLOSEOUT,
+        rate_curve_path=write_curve(tmp_path, rows),
+        max_rate_age="8 hours",
+    )
+
+    interpolated_rate = 0.20 + 0.5 * (0.365 - 0.20)
+    expected = 10.0 * math.exp(interpolated_rate * 0.5 / 360.0) + 15.0 * math.exp(
+        0.73 * 0.25 / 360.0
+    )
+    assert snapshot.total_cash_amount == pytest.approx(expected)
+    assert snapshot.rate_day_count == "ACT/360"
+
+
+def test_rate_curve_rejects_ungoverned_calendar_and_mixed_day_counts(tmp_path: Path) -> None:
+    calendar_adjusted = rate_curve_rows()
+    for row in calendar_adjusted:
+        row["calendar_id"] = "NYC"
+    with pytest.raises(ValueError, match="calendar_id must be NONE"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, calendar_adjusted),
+        )
+
+    mixed_day_count = rate_curve_rows()
+    mixed_day_count[0]["day_count"] = "ACT/360"
+    with pytest.raises(ValueError, match="exactly one day_count"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, mixed_day_count),
+        )
+
+    unsupported = rate_curve_rows()
+    for row in unsupported:
+        row["day_count"] = "30E/360"
+    with pytest.raises(ValueError, match="ACT/360 or ACT/365F"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, unsupported),
         )
 
 
