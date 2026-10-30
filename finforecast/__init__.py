@@ -1,6 +1,7 @@
 """Leakage-aware financial time-series forecasting reference project."""
 
 from .backtest import BacktestRunner
+from .business_calendar import BusinessCalendar, load_business_calendar
 from .corporate_actions import (
     CorporateActionSnapshot,
     apply_point_in_time_corporate_actions,
@@ -23,6 +24,7 @@ __version__ = "2.1.0"
 __all__ = [
     "__version__",
     "BacktestRunner",
+    "BusinessCalendar",
     "CorporateActionSnapshot",
     "ForecastExperiment",
     "ForecastTargetSpec",
@@ -35,6 +37,7 @@ __all__ = [
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "load_market_csv",
+    "load_business_calendar",
     "load_point_in_time_market_csv",
     "load_point_in_time_settlement",
 ]

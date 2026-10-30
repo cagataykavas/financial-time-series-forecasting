@@ -65,6 +65,9 @@ class SettlementSnapshot:
     rate_source_name: str | None
     rate_curve_id: str | None
     rate_calendar_id: str | None
+    rate_calendar_revision_id: str | None
+    rate_calendar_sha256: str | None
+    rate_roll_convention: str | None
     rate_day_count: str | None
     rate_max_age_seconds: float | None
     rate_observed_max_age_seconds: float | None
@@ -108,6 +111,9 @@ class SettlementSnapshot:
             "rate_source_name": self.rate_source_name,
             "rate_curve_id": self.rate_curve_id,
             "rate_calendar_id": self.rate_calendar_id,
+            "rate_calendar_revision_id": self.rate_calendar_revision_id,
+            "rate_calendar_sha256": self.rate_calendar_sha256,
+            "rate_roll_convention": self.rate_roll_convention,
             "rate_day_count": self.rate_day_count,
             "rate_max_age_seconds": self.rate_max_age_seconds,
             "rate_observed_max_age_seconds": self.rate_observed_max_age_seconds,
@@ -178,6 +184,7 @@ def load_point_in_time_settlement(
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
     rate_curve_path: str | Path | None = None,
+    calendar_path: str | Path | None = None,
     max_rate_age: object = "7 days",
 ) -> SettlementSnapshot:
     """Select the latest known settlement revisions and require an explicit closeout.
@@ -320,10 +327,13 @@ def load_point_in_time_settlement(
             rate_curve_path,
             cutoff=cutoff,
             expected_currency=price_currency,
+            calendar_path=calendar_path,
         )
         if rate_curve_path is not None
         else None
     )
+    if rate_curve_path is None and calendar_path is not None:
+        raise ValueError("settlement business-calendar JSON requires a rate-curve CSV")
     if rate_book is not None and not (cash_flows["effective_at"] < closeout_timestamp).any():
         raise ValueError("settlement rate curve requires a cash flow before closeout")
     converted_by_event: dict[str, dict[str, object]] = {}
@@ -369,11 +379,20 @@ def load_point_in_time_settlement(
         nominal_cash_amounts.append(converted_cash_amount)
         terminal_cash_amount = converted_cash_amount
         if rate_book is not None and row.effective_at < closeout_timestamp:
-            tenor_days = (closeout_timestamp - row.effective_at).total_seconds() / 86_400.0
+            adjusted_start = row.effective_at
+            adjusted_end = closeout_timestamp
+            if rate_book.business_calendar is not None:
+                adjusted_start = rate_book.business_calendar.adjust(
+                    adjusted_start, rate_book.roll_convention
+                )
+                adjusted_end = rate_book.business_calendar.adjust(
+                    adjusted_end, rate_book.roll_convention
+                )
+            tenor_days = (adjusted_end - adjusted_start).total_seconds() / 86_400.0
+            if not math.isfinite(tenor_days) or tenor_days <= 0:
+                raise ValueError("calendar-adjusted settlement accrual interval must be positive")
             curve = rate_book.resolve(row.effective_at, tenor_days, rate_age)
-            accrual_year_fraction = year_fraction(
-                row.effective_at, closeout_timestamp, curve.day_count
-            )
+            accrual_year_fraction = year_fraction(adjusted_start, adjusted_end, curve.day_count)
             try:
                 accumulation_factor = math.exp(curve.zero_rate * accrual_year_fraction)
             except OverflowError as exc:
@@ -389,6 +408,10 @@ def load_point_in_time_settlement(
                 {
                     "rate_curve": curve.metadata(),
                     "calendar_id": curve.calendar_id,
+                    "calendar_sha256": curve.calendar_sha256,
+                    "roll_convention": curve.roll_convention,
+                    "adjusted_accrual_start": adjusted_start.isoformat(),
+                    "adjusted_accrual_end": adjusted_end.isoformat(),
                     "day_count": curve.day_count,
                     "year_fraction": accrual_year_fraction,
                     "compounding": "continuous",
@@ -457,6 +480,13 @@ def load_point_in_time_settlement(
         rate_source_name=rate_book.source_name if rate_book else None,
         rate_curve_id=rate_book.curve_id if rate_book else None,
         rate_calendar_id=rate_book.calendar_id if rate_book else None,
+        rate_calendar_revision_id=(
+            rate_book.business_calendar.revision_id
+            if rate_book and rate_book.business_calendar
+            else None
+        ),
+        rate_calendar_sha256=rate_book.calendar_sha256 if rate_book else None,
+        rate_roll_convention=rate_book.roll_convention if rate_book else None,
         rate_day_count=rate_book.day_count if rate_book else None,
         rate_max_age_seconds=rate_age.total_seconds() if rate_book else None,
         rate_observed_max_age_seconds=max(observed_rate_ages, default=0.0) if rate_book else None,
@@ -468,7 +498,7 @@ def load_point_in_time_settlement(
         rate_lineage_sha256=rate_book.lineage_sha256 if rate_book else None,
         selected_events_sha256=_digest(
             {
-                "schema_version": 4,
+                "schema_version": 5,
                 "as_of": cutoff.isoformat(),
                 "price_currency": price_currency,
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
@@ -478,6 +508,13 @@ def load_point_in_time_settlement(
                 "rate_lineage_sha256": rate_book.lineage_sha256 if rate_book else None,
                 "rate_max_age_seconds": rate_age.total_seconds() if rate_book else None,
                 "rate_calendar_id": rate_book.calendar_id if rate_book else None,
+                "rate_calendar_revision_id": (
+                    rate_book.business_calendar.revision_id
+                    if rate_book and rate_book.business_calendar
+                    else None
+                ),
+                "rate_calendar_sha256": rate_book.calendar_sha256 if rate_book else None,
+                "rate_roll_convention": rate_book.roll_convention if rate_book else None,
                 "rate_day_count": rate_book.day_count if rate_book else None,
                 "rate_compounding": "continuous" if rate_book else None,
                 "selection": "latest_available_revision_then_effective_closeout",

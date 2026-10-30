@@ -106,6 +106,12 @@ def _build_evidence(
                     "using a revision-aware price-currency zero curve, governed "
                     f"{settlement['rate_day_count']} day count and continuous compounding."
                 )
+                if settlement["rate_calendar_sha256"]:
+                    snapshot_claims.append(
+                        "Settlement accrual dates use a digest-bound UTC business calendar and "
+                        f"reviewed {settlement['rate_roll_convention']} rolling without changing "
+                        "the point-in-time curve-selection timestamp."
+                    )
             if settlement["fx_source_name"]:
                 snapshot_claims.append(
                     "Terminal recovery converts each foreign-currency settlement cash flow "
@@ -137,7 +143,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 14,
+        "schema_version": 15,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

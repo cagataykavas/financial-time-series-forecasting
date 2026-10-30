@@ -79,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
         help="revision-bearing price-currency zero curves for carrying cash to closeout",
     )
     parser.add_argument(
+        "--settlement-calendar-json",
+        type=Path,
+        help="digest-bound UTC business calendar for settlement accrual adjustment",
+    )
+    parser.add_argument(
         "--max-fx-age-hours",
         type=_positive_float,
         default=168.0,
@@ -143,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--settlement-fx-rates-csv requires --settlement-ledger-csv")
     if args.settlement_rate_curve_csv is not None and args.settlement_ledger_csv is None:
         parser.error("--settlement-rate-curve-csv requires --settlement-ledger-csv")
+    if args.settlement_calendar_json is not None and args.settlement_rate_curve_csv is None:
+        parser.error("--settlement-calendar-json requires --settlement-rate-curve-csv")
     if args.fx_bridge_currency and args.fx_rates_csv is None:
         parser.error("--fx-bridge-currency requires --fx-rates-csv")
     if args.settlement_fx_bridge_currency and args.settlement_fx_rates_csv is None:
@@ -178,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
                     settlement_ledger_path=args.settlement_ledger_csv,
                     settlement_fx_rates_path=args.settlement_fx_rates_csv,
                     settlement_rate_curve_path=args.settlement_rate_curve_csv,
+                    settlement_calendar_path=args.settlement_calendar_json,
                     max_fx_age=f"{args.max_fx_age_hours} hours",
                     max_fx_leg_skew=f"{args.max_fx_leg_skew_hours} hours",
                     fx_bridge_currencies=tuple(args.fx_bridge_currency),

@@ -10,15 +10,25 @@ from typing import Any
 
 import pandas as pd
 
+from .business_calendar import (
+    SUPPORTED_ROLL_CONVENTIONS,
+    BusinessCalendar,
+    load_business_calendar,
+)
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 SUPPORTED_DAY_COUNTS = frozenset({"ACT/360", "ACT/365F"})
 UNADJUSTED_CALENDAR_ID = "NONE"
+UNADJUSTED_ROLL_CONVENTION = "UNADJUSTED"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RATE_CURVE_COLUMNS = frozenset(
     {
         "curve_id",
         "currency",
         "calendar_id",
+        "calendar_sha256",
+        "roll_convention",
         "day_count",
         "observed_at",
         "available_at",
@@ -69,6 +79,8 @@ def _timestamps(values: pd.Series, column: str) -> pd.DatetimeIndex:
 class RateCurveSelection:
     curve_id: str
     calendar_id: str
+    calendar_sha256: str | None
+    roll_convention: str
     day_count: str
     observed_at: pd.Timestamp
     available_at: pd.Timestamp
@@ -82,6 +94,8 @@ class RateCurveSelection:
         return {
             "curve_id": self.curve_id,
             "calendar_id": self.calendar_id,
+            "calendar_sha256": self.calendar_sha256,
+            "roll_convention": self.roll_convention,
             "day_count": self.day_count,
             "observed_at": self.observed_at.isoformat(),
             "available_at": self.available_at.isoformat(),
@@ -99,6 +113,9 @@ class RateCurveBook:
     curve_id: str
     currency: str
     calendar_id: str
+    calendar_sha256: str | None
+    roll_convention: str
+    business_calendar: BusinessCalendar | None
     day_count: str
     rows: pd.DataFrame
     cutoff: pd.Timestamp
@@ -148,6 +165,8 @@ class RateCurveBook:
         return RateCurveSelection(
             curve_id=self.curve_id,
             calendar_id=self.calendar_id,
+            calendar_sha256=self.calendar_sha256,
+            roll_convention=self.roll_convention,
             day_count=self.day_count,
             observed_at=observed_at,
             available_at=available_at,
@@ -164,6 +183,7 @@ def load_rate_curve_book(
     *,
     cutoff: pd.Timestamp,
     expected_currency: str,
+    calendar_path: str | Path | None = None,
 ) -> RateCurveBook:
     if not isinstance(expected_currency, str) or CURRENCY_RE.fullmatch(expected_currency) is None:
         raise ValueError("settlement rate-curve currency must be an uppercase ISO 4217 code")
@@ -171,7 +191,7 @@ def load_rate_curve_book(
     if not source.is_file():
         raise ValueError(f"settlement rate-curve CSV does not exist or is not a file: {source}")
     try:
-        frame = pd.read_csv(source, keep_default_na=False)
+        frame = pd.read_csv(source, keep_default_na=False, dtype={"calendar_sha256": str})
     except (OSError, UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
         raise ValueError(f"cannot read settlement rate-curve CSV: {exc}") from exc
     if frame.empty:
@@ -197,10 +217,41 @@ def load_rate_curve_book(
     if any(value != expected_currency for value in currencies):
         raise ValueError("settlement rate curve must use the price currency")
     calendar_ids = frame["calendar_id"].tolist()
-    if any(value != UNADJUSTED_CALENDAR_ID for value in calendar_ids):
-        raise ValueError(
-            "settlement rate-curve calendar_id must be NONE until calendar adjustment is supported"
+    if (
+        any(
+            not isinstance(value, str) or IDENTIFIER_RE.fullmatch(value) is None
+            for value in calendar_ids
         )
+        or len(set(calendar_ids)) != 1
+    ):
+        raise ValueError("settlement rate-curve CSV must contain one valid calendar_id")
+    calendar_hashes = frame["calendar_sha256"].tolist()
+    roll_conventions = frame["roll_convention"].tolist()
+    if len(set(calendar_hashes)) != 1 or len(set(roll_conventions)) != 1:
+        raise ValueError("settlement rate-curve CSV must contain one calendar policy")
+    calendar_id = calendar_ids[0]
+    calendar_sha256 = calendar_hashes[0]
+    roll_convention = roll_conventions[0]
+    business_calendar: BusinessCalendar | None = None
+    if calendar_id == UNADJUSTED_CALENDAR_ID:
+        if calendar_sha256 != "" or roll_convention != UNADJUSTED_ROLL_CONVENTION:
+            raise ValueError("unadjusted settlement curves require an empty calendar digest")
+        if calendar_path is not None:
+            raise ValueError(
+                "settlement business-calendar JSON is not allowed for calendar_id NONE"
+            )
+    else:
+        if SHA256_RE.fullmatch(calendar_sha256) is None:
+            raise ValueError("settlement rate-curve calendar_sha256 must be lowercase SHA-256")
+        if roll_convention not in SUPPORTED_ROLL_CONVENTIONS:
+            raise ValueError("settlement rate-curve roll_convention is unsupported")
+        if calendar_path is None:
+            raise ValueError("adjusted settlement curve requires a business-calendar JSON")
+        business_calendar = load_business_calendar(calendar_path)
+        if business_calendar.calendar_id != calendar_id:
+            raise ValueError("settlement business-calendar identifier does not match rate curve")
+        if business_calendar.sha256 != calendar_sha256:
+            raise ValueError("settlement business-calendar digest does not match rate curve")
     day_counts = frame["day_count"].tolist()
     if any(value not in SUPPORTED_DAY_COUNTS for value in day_counts):
         raise ValueError("settlement rate-curve day_count must be ACT/360 or ACT/365F")
@@ -223,6 +274,8 @@ def load_rate_curve_book(
             "curve_id": curve_ids,
             "currency": currencies,
             "calendar_id": calendar_ids,
+            "calendar_sha256": calendar_hashes,
+            "roll_convention": roll_conventions,
             "day_count": day_counts,
             "observed_at": observed_at,
             "available_at": available_at,
@@ -274,6 +327,8 @@ def load_rate_curve_book(
                 "curve_id": row.curve_id,
                 "currency": row.currency,
                 "calendar_id": row.calendar_id,
+                "calendar_sha256": row.calendar_sha256 or None,
+                "roll_convention": row.roll_convention,
                 "day_count": row.day_count,
                 "observed_at": row.observed_at.isoformat(),
                 "available_at": row.available_at.isoformat(),
@@ -287,6 +342,9 @@ def load_rate_curve_book(
         curve_id=curve_ids[0],
         currency=expected_currency,
         calendar_id=calendar_ids[0],
+        calendar_sha256=calendar_sha256 or None,
+        roll_convention=roll_convention,
+        business_calendar=business_calendar,
         day_count=day_counts[0],
         rows=selected,
         cutoff=cutoff,
@@ -295,6 +353,6 @@ def load_rate_curve_book(
         excluded_unavailable_rows=int((~eligible_mask).sum()),
         superseded_revisions=superseded,
         lineage_sha256=_digest(
-            {"schema_version": 2, "as_of": cutoff.isoformat(), "rows": lineage_rows}
+            {"schema_version": 3, "as_of": cutoff.isoformat(), "rows": lineage_rows}
         ),
     )
