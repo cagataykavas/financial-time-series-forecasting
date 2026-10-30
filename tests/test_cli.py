@@ -5,6 +5,7 @@ import json
 import pandas as pd
 import pytest
 
+from finforecast.business_calendar import load_business_calendar
 from finforecast.cli import main
 from finforecast.synthetic import synthetic_market
 
@@ -176,6 +177,8 @@ def settlement_rate_curve_csv(tmp_path, settlement_path):
                     "curve_id": "USD-OIS",
                     "currency": "USD",
                     "calendar_id": "NONE",
+                    "calendar_sha256": "",
+                    "roll_convention": "UNADJUSTED",
                     "day_count": "ACT/365F",
                     "observed_at": observed_at,
                     "available_at": available_at,
@@ -186,6 +189,33 @@ def settlement_rate_curve_csv(tmp_path, settlement_path):
             )
     pd.DataFrame(rows).to_csv(path, index=False)
     return path
+
+
+def settlement_calendar_json(tmp_path, curve_path):
+    path = tmp_path / "settlement-calendar.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "calendar_id": "USD-SETTLEMENT",
+                "revision_id": "2022-r1",
+                "timezone": "UTC",
+                "valid_from": "2022-01-01",
+                "valid_through": "2022-12-31",
+                "weekend_days": [5, 6],
+                "holidays": ["2022-04-22"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    digest = load_business_calendar(path).sha256
+    curves = pd.read_csv(curve_path, keep_default_na=False, dtype={"calendar_sha256": str})
+    curves["calendar_id"] = "USD-SETTLEMENT"
+    curves["calendar_sha256"] = digest
+    curves["roll_convention"] = "FOLLOWING"
+    curves.to_csv(curve_path, index=False)
+    return path, digest
 
 
 def fx_rates_csv(tmp_path, market_path):
@@ -362,7 +392,7 @@ def test_cli_binds_cash_dividend_total_return_snapshot_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 14
+    assert evidence["schema_version"] == 15
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert snapshot["applied_cash_dividends"] == 1
     assert snapshot["price_currency"] == "USD"
@@ -397,7 +427,7 @@ def test_cli_binds_cash_delisting_terminal_payout_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 14
+    assert evidence["schema_version"] == 15
     assert evidence["dataset"]["kind"] == "point_in_time_total_return_adjusted_market"
     assert evidence["dataset"]["raw_observations"] == 340
     assert evidence["dataset"]["adjusted_observations"] == 341
@@ -434,7 +464,7 @@ def test_cli_binds_zero_recovery_without_accepting_ordinary_zero_prices(tmp_path
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     snapshot = evidence["dataset"]["corporate_actions"]
-    assert evidence["schema_version"] == 14
+    assert evidence["schema_version"] == 15
     assert snapshot["terminal_zero_recovery"] is True
     assert snapshot["fx_source_name"] is None
     assert any("zero terminal close" in claim for claim in evidence["claims"])
@@ -471,7 +501,7 @@ def test_cli_binds_revision_aware_settlement_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     settlement = evidence["dataset"]["corporate_actions"]["settlement"]
-    assert evidence["schema_version"] == 14
+    assert evidence["schema_version"] == 15
     assert settlement["total_cash_amount"] == 30.0
     assert settlement["applied_cash_flows"] == 2
     assert len(settlement["lineage_sha256"]) == 64
@@ -525,6 +555,7 @@ def test_cli_binds_revision_aware_settlement_curve_to_evidence(tmp_path):
     actions = delisting_actions_csv(tmp_path, source, recovery_ratio=0.0)
     settlements = settlement_ledger_csv(tmp_path, source)
     curves = settlement_rate_curve_csv(tmp_path, settlements)
+    calendar, calendar_sha256 = settlement_calendar_json(tmp_path, curves)
     output = tmp_path / "rate-adjusted-settlement-evidence"
 
     assert (
@@ -540,6 +571,8 @@ def test_cli_binds_revision_aware_settlement_curve_to_evidence(tmp_path):
                 str(settlements),
                 "--settlement-rate-curve-csv",
                 str(curves),
+                "--settlement-calendar-json",
+                str(calendar),
                 "--settlement-max-rate-age-hours",
                 "1",
                 "--symbol",
@@ -556,15 +589,19 @@ def test_cli_binds_revision_aware_settlement_curve_to_evidence(tmp_path):
 
     evidence = json.loads((output / "forecast_evidence.json").read_text())
     settlement = evidence["dataset"]["corporate_actions"]["settlement"]
-    assert evidence["schema_version"] == 14
+    assert evidence["schema_version"] == 15
     assert settlement["nominal_cash_amount"] == 30.0
     assert settlement["total_cash_amount"] > 30.0
     assert settlement["rate_curve_id"] == "USD-OIS"
-    assert settlement["rate_calendar_id"] == "NONE"
+    assert settlement["rate_calendar_id"] == "USD-SETTLEMENT"
+    assert settlement["rate_calendar_revision_id"] == "2022-r1"
+    assert settlement["rate_calendar_sha256"] == calendar_sha256
+    assert settlement["rate_roll_convention"] == "FOLLOWING"
     assert settlement["rate_day_count"] == "ACT/365F"
     assert settlement["rate_selected_curves"] == 2
     assert len(settlement["rate_lineage_sha256"]) == 64
     assert any("revision-aware price-currency zero curve" in claim for claim in evidence["claims"])
+    assert any("digest-bound UTC business calendar" in claim for claim in evidence["claims"])
 
 
 def test_cli_binds_point_in_time_fx_conversion_to_evidence(tmp_path):
@@ -662,6 +699,7 @@ def test_cli_binds_declared_fx_bridge_route_to_evidence(tmp_path):
         ["--fx-bridge-currency", "GBP"],
         ["--settlement-ledger-csv", "settlement.csv"],
         ["--settlement-rate-curve-csv", "rates.csv"],
+        ["--settlement-calendar-json", "calendar.json"],
     ],
 )
 def test_cli_requires_complete_point_in_time_action_configuration(arguments):

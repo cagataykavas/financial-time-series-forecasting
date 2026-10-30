@@ -160,6 +160,7 @@ def _apply_point_in_time_actions(
     settlement_ledger_path: str | Path | None,
     settlement_fx_rates_path: str | Path | None,
     settlement_rate_curve_path: str | Path | None,
+    settlement_calendar_path: str | Path | None,
     max_fx_age: object,
     max_fx_leg_skew: object,
     fx_bridge_currencies: tuple[str, ...],
@@ -349,10 +350,18 @@ def _apply_point_in_time_actions(
             max_fx_leg_skew=settlement_max_fx_leg_skew,
             fx_bridge_currencies=settlement_fx_bridge_currencies,
             rate_curve_path=settlement_rate_curve_path,
+            calendar_path=settlement_calendar_path,
             max_rate_age=settlement_max_rate_age,
         )
-    elif settlement_fx_rates_path is not None or settlement_rate_curve_path is not None:
-        raise ValueError("settlement FX/rate-curve CSV requires a settlement ledger")
+    elif any(
+        value is not None
+        for value in (
+            settlement_fx_rates_path,
+            settlement_rate_curve_path,
+            settlement_calendar_path,
+        )
+    ):
+        raise ValueError("settlement FX/rate-curve/calendar input requires a settlement ledger")
     required_fx_pairs = {
         (row.currency, price_currency)
         for row in applied.itertuples(index=False)
@@ -604,6 +613,7 @@ def apply_point_in_time_corporate_actions(
     settlement_ledger_path: str | Path | None = None,
     settlement_fx_rates_path: str | Path | None = None,
     settlement_rate_curve_path: str | Path | None = None,
+    settlement_calendar_path: str | Path | None = None,
     max_fx_age: object = "7 days",
     max_fx_leg_skew: object = "1 hour",
     fx_bridge_currencies: tuple[str, ...] = (),
@@ -624,6 +634,7 @@ def apply_point_in_time_corporate_actions(
         settlement_ledger_path=settlement_ledger_path,
         settlement_fx_rates_path=settlement_fx_rates_path,
         settlement_rate_curve_path=settlement_rate_curve_path,
+        settlement_calendar_path=settlement_calendar_path,
         max_fx_age=max_fx_age,
         max_fx_leg_skew=max_fx_leg_skew,
         fx_bridge_currencies=fx_bridge_currencies,
@@ -654,6 +665,7 @@ def apply_point_in_time_splits(
         settlement_ledger_path=None,
         settlement_fx_rates_path=None,
         settlement_rate_curve_path=None,
+        settlement_calendar_path=None,
         max_fx_age="7 days",
         max_fx_leg_skew="1 hour",
         fx_bridge_currencies=(),

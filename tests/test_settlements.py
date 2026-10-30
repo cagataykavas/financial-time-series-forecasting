@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from finforecast.business_calendar import load_business_calendar
 from finforecast.corporate_actions import apply_point_in_time_corporate_actions
 from finforecast.data import load_market_csv
 from finforecast.rate_curves import year_fraction
@@ -78,6 +79,27 @@ def write_curve(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
     return path
 
 
+def write_calendar(tmp_path: Path) -> tuple[Path, str]:
+    path = tmp_path / "settlement-calendar.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "calendar_id": "USD-SETTLEMENT",
+                "revision_id": "2024-r1",
+                "timezone": "UTC",
+                "valid_from": "2024-01-01",
+                "valid_through": "2024-12-31",
+                "weekend_days": [5, 6],
+                "holidays": ["2024-01-01", "2024-07-04"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path, load_business_calendar(path).sha256
+
+
 def rate_curve_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for observed_at, available_at, revision_id, rates in [
@@ -91,6 +113,8 @@ def rate_curve_rows() -> list[dict[str, object]]:
                     "curve_id": "USD-OIS",
                     "currency": "USD",
                     "calendar_id": "NONE",
+                    "calendar_sha256": "",
+                    "roll_convention": "UNADJUSTED",
                     "day_count": "ACT/365F",
                     "observed_at": observed_at,
                     "available_at": available_at,
@@ -349,7 +373,9 @@ def test_rate_curve_rejects_ungoverned_calendar_and_mixed_day_counts(tmp_path: P
     calendar_adjusted = rate_curve_rows()
     for row in calendar_adjusted:
         row["calendar_id"] = "NYC"
-    with pytest.raises(ValueError, match="calendar_id must be NONE"):
+        row["calendar_sha256"] = "0" * 64
+        row["roll_convention"] = "FOLLOWING"
+    with pytest.raises(ValueError, match="requires a business-calendar JSON"):
         load_point_in_time_settlement(
             write_settlement(tmp_path, settlement_rows()),
             as_of=AS_OF,
@@ -385,6 +411,65 @@ def test_rate_curve_rejects_ungoverned_calendar_and_mixed_day_counts(tmp_path: P
             market_end=MARKET_END,
             expected_closeout_at=CLOSEOUT,
             rate_curve_path=write_curve(tmp_path, unsupported),
+        )
+
+
+def test_settlement_binds_calendar_digest_and_adjusted_accrual_dates(tmp_path: Path) -> None:
+    calendar_path, calendar_sha256 = write_calendar(tmp_path)
+    rows = rate_curve_rows()
+    for row in rows:
+        row.update(
+            {
+                "calendar_id": "USD-SETTLEMENT",
+                "calendar_sha256": calendar_sha256,
+                "roll_convention": "FOLLOWING",
+                "tenor_days": 2.0 if row["tenor_days"] == 0.25 else 3.0,
+                "zero_rate": 0.10,
+            }
+        )
+
+    snapshot = load_point_in_time_settlement(
+        write_settlement(tmp_path, settlement_rows()),
+        as_of=AS_OF,
+        symbol="ACME",
+        price_currency="USD",
+        market_end=MARKET_END,
+        expected_closeout_at=CLOSEOUT,
+        rate_curve_path=write_curve(tmp_path, rows),
+        calendar_path=calendar_path,
+        max_rate_age="8 hours",
+    )
+
+    expected = 10.0 * math.exp(0.10 * 2.75 / 365.0) + 15.0 * math.exp(0.10 * 2.25 / 365.0)
+    assert snapshot.total_cash_amount == pytest.approx(expected)
+    assert snapshot.rate_calendar_id == "USD-SETTLEMENT"
+    assert snapshot.rate_calendar_revision_id == "2024-r1"
+    assert snapshot.rate_calendar_sha256 == calendar_sha256
+    assert snapshot.rate_roll_convention == "FOLLOWING"
+
+
+def test_settlement_rejects_calendar_digest_mismatch_before_curve_use(tmp_path: Path) -> None:
+    calendar_path, _ = write_calendar(tmp_path)
+    rows = rate_curve_rows()
+    for row in rows:
+        row.update(
+            {
+                "calendar_id": "USD-SETTLEMENT",
+                "calendar_sha256": "0" * 64,
+                "roll_convention": "FOLLOWING",
+            }
+        )
+
+    with pytest.raises(ValueError, match="calendar digest does not match"):
+        load_point_in_time_settlement(
+            write_settlement(tmp_path, settlement_rows()),
+            as_of=AS_OF,
+            symbol="ACME",
+            price_currency="USD",
+            market_end=MARKET_END,
+            expected_closeout_at=CLOSEOUT,
+            rate_curve_path=write_curve(tmp_path, rows),
+            calendar_path=calendar_path,
         )
 
 

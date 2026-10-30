@@ -222,6 +222,7 @@ finforecast \
   --settlement-ledger-csv settlement-vintages.csv \
   --settlement-fx-rates-csv settlement-fx-vintages.csv \
   --settlement-rate-curve-csv settlement-rate-curves.csv \
+  --settlement-calendar-json settlement-calendar.json \
   --settlement-max-rate-age-hours 24 \
   --symbol ACME \
   --price-currency USD \
@@ -244,11 +245,13 @@ cash flow selects the latest admissible direct or declared two-leg route at that
 
 An optional, separately governed `--settlement-rate-curve-csv` carries converted payments to the
 closeout timestamp. Its strict schema is
-`curve_id,currency,calendar_id,day_count,observed_at,available_at,revision_id,tenor_days,zero_rate`.
+`curve_id,currency,calendar_id,calendar_sha256,roll_convention,day_count,observed_at,available_at,revision_id,tenor_days,zero_rate`.
 The feed must contain one price-currency curve with complete tenor shapes and one day-count policy
-across revisions. `day_count` is restricted to `ACT/365F` or `ACT/360`. `calendar_id` must be
-`NONE`: nontrivial business-calendar adjustment is deliberately rejected until it can be governed
-and validated. For each pre-closeout payment,
+across revisions. `day_count` is restricted to `ACT/365F` or `ACT/360`. An unadjusted curve uses
+`calendar_id=NONE`, an empty `calendar_sha256`, and `roll_convention=UNADJUSTED`. Any other calendar
+requires `--settlement-calendar-json`; its canonical content digest and identifier must exactly match
+the curve declarations. Reviewed roll conventions are `FOLLOWING`, `PRECEDING`, and
+`MODIFIED_FOLLOWING`. For each pre-closeout payment,
 the latest curve observation at or before that payment is selected from revisions known by
 `--as-of`; rates are linearly interpolated in tenor without extrapolation. Curve observations older
 than `--settlement-max-rate-age-hours` fail closed. The terminal close uses the curve's declared
@@ -256,7 +259,8 @@ actual-day convention and continuous compounding:
 
 ```text
 converted_i = cash_amount_i * product(route_leg_rates_at_effective_at_i)
-year_fraction_i = actual_elapsed_days_i / (360 or 365)
+adjusted_start_i, adjusted_end_i = calendar_roll(original timestamps)
+year_fraction_i = adjusted_elapsed_days_i / (360 or 365)
 terminal_close = sum(converted_i * exp(zero_rate_i(tenor_i) * year_fraction_i))
 ```
 
@@ -264,11 +268,18 @@ Evidence binds selection counts, total cash, closeout time, selected-event diges
 digest, FX revision lineage and route metadata, rate-curve lineage, interpolation brackets,
 day-count and compounding conventions, and the resulting market fingerprint. Unknown
 columns, mixed symbols, event-type changes, missing or non-terminal closeout, undeclared/unused FX
-routes, stale or future-only quotes/curves, mixed or unsupported day counts, non-`NONE` calendars,
-curve extrapolation, pre-delisting cash flows, and a
+routes, stale or future-only quotes/curves, mixed or unsupported day counts, calendar digest or
+coverage mismatches, unsupported roll rules, curve extrapolation, pre-delisting cash flows, and a
 non-zero direct delisting payout fail closed. With no curve, the backward-compatible factor is one.
-This contract does not model withholding tax, execution spreads, non-cash consideration, calendar-
-adjusted day counts, collateral/funding basis, or distributions announced after the governed cutoff.
+The calendar artifact has a strict schema: version, stable ID and revision, `timezone=UTC`, inclusive
+coverage dates, sorted weekday numbers, and sorted ISO holiday dates. Curve selection still uses the
+original cash-flow timestamp; rolling can change only the accrual interval and cannot admit a future
+curve observation. Evidence binds the artifact digest, revision, roll convention, and both adjusted
+timestamps. UTC-only calendars avoid silently depending on an ungoverned host timezone database.
+
+This contract does not model withholding tax, execution spreads, non-cash consideration, local-time
+market calendars, ad-hoc closures, collateral/funding basis, or distributions announced after the
+governed cutoff.
 Vendor availability timestamps, curve construction, and ISO currency labels remain external
 governance dependencies.
 
