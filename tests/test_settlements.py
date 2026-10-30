@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from finforecast.business_calendar import load_business_calendar
+from finforecast.business_calendar import PINNED_TZDATA_VERSION, load_business_calendar
 from finforecast.corporate_actions import apply_point_in_time_corporate_actions
 from finforecast.data import load_market_csv
 from finforecast.rate_curves import year_fraction
@@ -92,6 +92,28 @@ def write_calendar(tmp_path: Path) -> tuple[Path, str]:
                 "valid_through": "2024-12-31",
                 "weekend_days": [5, 6],
                 "holidays": ["2024-01-01", "2024-07-04"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path, load_business_calendar(path).sha256
+
+
+def write_local_calendar(tmp_path: Path) -> tuple[Path, str]:
+    path = tmp_path / "local-settlement-calendar.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "calendar_id": "USD-NY-SETTLEMENT",
+                "revision_id": "2026f-r1",
+                "timezone": "America/New_York",
+                "tzdata_version": PINNED_TZDATA_VERSION,
+                "valid_from": "2024-01-01",
+                "valid_through": "2024-12-31",
+                "weekend_days": [5, 6],
+                "holidays": ["2024-03-08"],
             },
             indent=2,
         ),
@@ -445,7 +467,76 @@ def test_settlement_binds_calendar_digest_and_adjusted_accrual_dates(tmp_path: P
     assert snapshot.rate_calendar_id == "USD-SETTLEMENT"
     assert snapshot.rate_calendar_revision_id == "2024-r1"
     assert snapshot.rate_calendar_sha256 == calendar_sha256
+    assert snapshot.rate_calendar_timezone == "UTC"
+    assert snapshot.rate_calendar_tzdata_version is None
     assert snapshot.rate_roll_convention == "FOLLOWING"
+
+
+def test_local_calendar_adjusts_accrual_without_moving_curve_selection(
+    tmp_path: Path,
+) -> None:
+    calendar_path, calendar_sha256 = write_local_calendar(tmp_path)
+    settlements = [
+        {
+            "event_id": "cash-dst",
+            "symbol": "ACME",
+            "event_type": "cash_flow",
+            "effective_at": "2024-03-08T21:00:00Z",
+            "available_at": "2024-03-08T22:00:00Z",
+            "revision_id": "r1",
+            "cash_amount": 10.0,
+            "currency": "USD",
+        },
+        {
+            "event_id": "closeout",
+            "symbol": "ACME",
+            "event_type": "closeout",
+            "effective_at": "2024-03-12T21:00:00Z",
+            "available_at": "2024-03-12T22:00:00Z",
+            "revision_id": "r1",
+            "cash_amount": 0.0,
+            "currency": "",
+        },
+    ]
+    curves: list[dict[str, object]] = []
+    for observed_at, available_at, revision_id, zero_rate in [
+        ("2024-03-08T20:00:00Z", "2024-03-08T20:30:00Z", "before-r1", 0.10),
+        ("2024-03-10T00:00:00Z", "2024-03-10T00:30:00Z", "after-r1", 0.90),
+    ]:
+        for tenor_days in (0.5, 2.0):
+            curves.append(
+                {
+                    "curve_id": "USD-OIS",
+                    "currency": "USD",
+                    "calendar_id": "USD-NY-SETTLEMENT",
+                    "calendar_sha256": calendar_sha256,
+                    "roll_convention": "FOLLOWING",
+                    "day_count": "ACT/365F",
+                    "observed_at": observed_at,
+                    "available_at": available_at,
+                    "revision_id": revision_id,
+                    "tenor_days": tenor_days,
+                    "zero_rate": zero_rate,
+                }
+            )
+
+    snapshot = load_point_in_time_settlement(
+        write_settlement(tmp_path, settlements),
+        as_of="2024-03-13T00:00:00Z",
+        symbol="ACME",
+        price_currency="USD",
+        market_end="2024-03-08T00:00:00Z",
+        expected_closeout_at="2024-03-12T21:00:00Z",
+        rate_curve_path=write_curve(tmp_path, curves),
+        calendar_path=calendar_path,
+        max_rate_age="2 hours",
+    )
+
+    expected = 10.0 * math.exp(0.10 * (25.0 / 24.0) / 365.0)
+    assert snapshot.total_cash_amount == pytest.approx(expected)
+    assert snapshot.rate_calendar_timezone == "America/New_York"
+    assert snapshot.rate_calendar_tzdata_version == PINNED_TZDATA_VERSION
+    assert snapshot.rate_selected_curves == 1
 
 
 def test_settlement_rejects_calendar_digest_mismatch_before_curve_use(tmp_path: Path) -> None:

@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
+import importlib.resources
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
 CALENDAR_SCHEMA_VERSION = 1
+LOCAL_CALENDAR_SCHEMA_VERSION = 2
+PINNED_TZDATA_VERSION = "2026.6"
 SUPPORTED_ROLL_CONVENTIONS = frozenset({"FOLLOWING", "MODIFIED_FOLLOWING", "PRECEDING"})
-_CALENDAR_KEYS = frozenset(
+_UTC_CALENDAR_KEYS = frozenset(
     {
         "schema_version",
         "calendar_id",
@@ -23,8 +28,10 @@ _CALENDAR_KEYS = frozenset(
         "holidays",
     }
 )
+_LOCAL_CALENDAR_KEYS = _UTC_CALENDAR_KEYS | {"tzdata_version"}
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ZONE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
 _MAX_ADJUSTMENT_DAYS = 366
 
 
@@ -63,11 +70,14 @@ def _date(value: object, field: str) -> date:
 class BusinessCalendar:
     calendar_id: str
     revision_id: str
+    timezone: str
+    tzdata_version: str | None
     valid_from: date
     valid_through: date
     weekend_days: frozenset[int]
     holidays: frozenset[date]
     sha256: str
+    _zone: ZoneInfo | None = field(default=None, repr=False, compare=False)
 
     def _covered(self, value: date) -> None:
         if not self.valid_from <= value <= self.valid_through:
@@ -86,14 +96,15 @@ class BusinessCalendar:
         raise ValueError("business-calendar adjustment exceeds safety bound")
 
     def adjust(self, timestamp: pd.Timestamp, roll_convention: str) -> pd.Timestamp:
-        """Adjust a UTC timestamp by its UTC calendar date, preserving time of day."""
+        """Adjust by the governed calendar date while preserving its wall-clock time."""
 
         if roll_convention not in SUPPORTED_ROLL_CONVENTIONS:
             raise ValueError("unsupported settlement business-day roll convention")
         if not isinstance(timestamp, pd.Timestamp) or timestamp.tzinfo is None:
             raise ValueError("business-calendar timestamps must be timezone-aware")
         value = timestamp.tz_convert("UTC")
-        original = value.date()
+        calendar_value = value if self._zone is None else value.tz_convert(self._zone)
+        original = calendar_value.date()
         self._covered(original)
         if self._is_business_day(original):
             return value
@@ -104,7 +115,48 @@ class BusinessCalendar:
             adjusted = self._search(original, 1)
             if roll_convention == "MODIFIED_FOLLOWING" and adjusted.month != original.month:
                 adjusted = self._search(original, -1)
-        return value + pd.Timedelta(days=(adjusted - original).days)
+        if self._zone is None:
+            return value + pd.Timedelta(days=(adjusted - original).days)
+
+        target = calendar_value.tz_localize(None) + pd.Timedelta(days=(adjusted - original).days)
+        try:
+            localized = target.tz_localize(
+                self._zone,
+                ambiguous="raise",
+                nonexistent="raise",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "business-calendar adjustment produces ambiguous or nonexistent local time"
+            ) from exc
+        return localized.tz_convert("UTC")
+
+
+def _load_pinned_zone(timezone: object, tzdata_version: object) -> tuple[str, ZoneInfo]:
+    if not isinstance(timezone, str) or not 1 <= len(timezone) <= 255:
+        raise ValueError("business-calendar timezone must be a canonical IANA name")
+    segments = timezone.split("/")
+    if (
+        len(segments) < 2
+        or any(segment in {"", ".", ".."} for segment in segments)
+        or any(_ZONE_SEGMENT_RE.fullmatch(segment) is None for segment in segments)
+    ):
+        raise ValueError("business-calendar timezone must be a canonical IANA name")
+    if tzdata_version != PINNED_TZDATA_VERSION:
+        raise ValueError(f"business-calendar tzdata_version must be {PINNED_TZDATA_VERSION}")
+    try:
+        installed_version = importlib.metadata.version("tzdata")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise ValueError("pinned tzdata package is not installed") from exc
+    if installed_version != PINNED_TZDATA_VERSION:
+        raise ValueError("installed tzdata package does not match the governed version")
+    resource = importlib.resources.files("tzdata.zoneinfo").joinpath(*segments)
+    try:
+        with resource.open("rb") as handle:
+            zone = ZoneInfo.from_file(handle, key=timezone)
+    except (FileNotFoundError, IsADirectoryError, OSError, ZoneInfoNotFoundError) as exc:
+        raise ValueError("business-calendar timezone is not present in pinned tzdata") from exc
+    return timezone, zone
 
 
 def load_business_calendar(path: str | Path) -> BusinessCalendar:
@@ -120,10 +172,19 @@ def load_business_calendar(path: str | Path) -> BusinessCalendar:
         )
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("cannot read settlement business-calendar JSON") from exc
-    if not isinstance(artifact, dict) or set(artifact) != _CALENDAR_KEYS:
+    if not isinstance(artifact, dict):
         raise ValueError("settlement business-calendar JSON does not match schema")
-    if artifact["schema_version"] != CALENDAR_SCHEMA_VERSION:
+    schema_version = artifact.get("schema_version")
+    if type(schema_version) is not int:
         raise ValueError("unsupported settlement business-calendar schema version")
+    expected_keys = {
+        CALENDAR_SCHEMA_VERSION: _UTC_CALENDAR_KEYS,
+        LOCAL_CALENDAR_SCHEMA_VERSION: _LOCAL_CALENDAR_KEYS,
+    }.get(schema_version)
+    if expected_keys is None:
+        raise ValueError("unsupported settlement business-calendar schema version")
+    if set(artifact) != expected_keys:
+        raise ValueError("settlement business-calendar JSON does not match schema")
     calendar_id = artifact["calendar_id"]
     revision_id = artifact["revision_id"]
     if any(
@@ -131,8 +192,18 @@ def load_business_calendar(path: str | Path) -> BusinessCalendar:
         for value in (calendar_id, revision_id)
     ):
         raise ValueError("settlement business-calendar identifiers are invalid")
-    if artifact["timezone"] != "UTC":
-        raise ValueError("settlement business-calendar timezone must be UTC")
+    timezone: str
+    tzdata_version: str | None
+    zone: ZoneInfo | None
+    if schema_version == CALENDAR_SCHEMA_VERSION:
+        if artifact["timezone"] != "UTC":
+            raise ValueError("schema-v1 settlement business-calendar timezone must be UTC")
+        timezone = "UTC"
+        tzdata_version = None
+        zone = None
+    else:
+        timezone, zone = _load_pinned_zone(artifact["timezone"], artifact["tzdata_version"])
+        tzdata_version = PINNED_TZDATA_VERSION
 
     valid_from = _date(artifact["valid_from"], "valid_from")
     valid_through = _date(artifact["valid_through"], "valid_through")
@@ -160,9 +231,12 @@ def load_business_calendar(path: str | Path) -> BusinessCalendar:
     return BusinessCalendar(
         calendar_id=calendar_id,
         revision_id=revision_id,
+        timezone=timezone,
+        tzdata_version=tzdata_version,
         valid_from=valid_from,
         valid_through=valid_through,
         weekend_days=frozenset(weekend_days),
         holidays=frozenset(parsed_holidays),
         sha256=hashlib.sha256(_canonical_bytes(artifact)).hexdigest(),
+        _zone=zone,
     )

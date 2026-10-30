@@ -107,8 +107,16 @@ def _build_evidence(
                     f"{settlement['rate_day_count']} day count and continuous compounding."
                 )
                 if settlement["rate_calendar_sha256"]:
+                    calendar_policy = (
+                        "UTC business calendar"
+                        if settlement["rate_calendar_timezone"] == "UTC"
+                        else (
+                            f"{settlement['rate_calendar_timezone']} local-time business calendar "
+                            f"pinned to tzdata {settlement['rate_calendar_tzdata_version']}"
+                        )
+                    )
                     snapshot_claims.append(
-                        "Settlement accrual dates use a digest-bound UTC business calendar and "
+                        f"Settlement accrual dates use a digest-bound {calendar_policy} and "
                         f"reviewed {settlement['rate_roll_convention']} rolling without changing "
                         "the point-in-time curve-selection timestamp."
                     )
@@ -143,7 +151,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 15,
+        "schema_version": 16,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",

@@ -271,15 +271,20 @@ columns, mixed symbols, event-type changes, missing or non-terminal closeout, un
 routes, stale or future-only quotes/curves, mixed or unsupported day counts, calendar digest or
 coverage mismatches, unsupported roll rules, curve extrapolation, pre-delisting cash flows, and a
 non-zero direct delisting payout fail closed. With no curve, the backward-compatible factor is one.
-The calendar artifact has a strict schema: version, stable ID and revision, `timezone=UTC`, inclusive
-coverage dates, sorted weekday numbers, and sorted ISO holiday dates. Curve selection still uses the
-original cash-flow timestamp; rolling can change only the accrual interval and cannot admit a future
-curve observation. Evidence binds the artifact digest, revision, roll convention, and both adjusted
-timestamps. UTC-only calendars avoid silently depending on an ungoverned host timezone database.
+The calendar artifact has two strict, backward-compatible schemas. Version 1 requires
+`timezone=UTC`. Version 2 requires a canonical IANA zone plus `tzdata_version=2026.6`; the runtime
+dependency is pinned to that exact release and zone files are loaded directly from the package,
+never from the host operating system. Both schemas require a stable ID and revision, inclusive
+coverage dates, sorted weekday numbers, and sorted ISO holiday dates. Local-time rolling preserves
+the wall-clock time across offset changes, and fails closed if the adjusted time is ambiguous or
+nonexistent at a daylight-saving transition. Curve selection still uses the original cash-flow
+timestamp; rolling can change only the accrual interval and cannot admit a future curve observation.
+Evidence binds the artifact digest, revision, timezone, tzdata release, roll convention, and both
+adjusted timestamps.
 
-This contract does not model withholding tax, execution spreads, non-cash consideration, local-time
-market calendars, ad-hoc closures, collateral/funding basis, or distributions announced after the
-governed cutoff.
+This contract does not model withholding tax, execution spreads, non-cash consideration, exchange
+session hours, jurisdiction-specific observance rules beyond the supplied holiday set, ad-hoc
+closures, collateral/funding basis, or distributions announced after the governed cutoff.
 Vendor availability timestamps, curve construction, and ISO currency labels remain external
 governance dependencies.
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from finforecast.business_calendar import load_business_calendar
+from finforecast.business_calendar import PINNED_TZDATA_VERSION, load_business_calendar
 
 
 def _artifact() -> dict[str, object]:
@@ -20,6 +20,25 @@ def _artifact() -> dict[str, object]:
         "valid_through": "2024-12-31",
         "weekend_days": [5, 6],
         "holidays": ["2024-01-01", "2024-07-04"],
+    }
+
+
+def _local_artifact(
+    *,
+    timezone: str = "America/New_York",
+    holidays: list[str] | None = None,
+    weekend_days: list[int] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "calendar_id": "USD-LOCAL-SETTLEMENT",
+        "revision_id": "2026f-r1",
+        "timezone": timezone,
+        "tzdata_version": PINNED_TZDATA_VERSION,
+        "valid_from": "2024-01-01",
+        "valid_through": "2024-12-31",
+        "weekend_days": [5, 6] if weekend_days is None else weekend_days,
+        "holidays": [] if holidays is None else holidays,
     }
 
 
@@ -44,6 +63,8 @@ def test_calendar_digest_is_canonical_and_metadata_bound(tmp_path: Path) -> None
 
     assert calendar.calendar_id == "USD-SETTLEMENT"
     assert calendar.revision_id == "2024-r1"
+    assert calendar.timezone == "UTC"
+    assert calendar.tzdata_version is None
     assert calendar.sha256 == expected
 
 
@@ -69,6 +90,7 @@ def test_calendar_applies_reviewed_roll_conventions(
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
+        ({"schema_version": True}, "unsupported.*schema version"),
         ({"timezone": "America/New_York"}, "timezone must be UTC"),
         ({"weekend_days": [6, 5]}, "weekend_days must be sorted"),
         ({"holidays": ["2024-07-04", "2024-01-01"]}, "holidays must be sorted"),
@@ -107,3 +129,76 @@ def test_calendar_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="duplicate keys"):
         load_business_calendar(path)
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "holidays", "expected"),
+    [
+        (
+            "2024-03-08T21:00:00Z",
+            ["2024-03-08"],
+            "2024-03-11T20:00:00Z",
+        ),
+        (
+            "2024-11-01T20:00:00Z",
+            ["2024-11-01"],
+            "2024-11-04T21:00:00Z",
+        ),
+    ],
+)
+def test_local_calendar_preserves_wall_clock_across_dst_boundaries(
+    tmp_path: Path,
+    timestamp: str,
+    holidays: list[str],
+    expected: str,
+) -> None:
+    calendar = load_business_calendar(_write(tmp_path, _local_artifact(holidays=holidays)))
+
+    assert calendar.timezone == "America/New_York"
+    assert calendar.tzdata_version == PINNED_TZDATA_VERSION
+    assert calendar.adjust(pd.Timestamp(timestamp), "FOLLOWING") == pd.Timestamp(expected)
+
+
+def test_local_calendar_uses_local_date_at_utc_month_boundary(tmp_path: Path) -> None:
+    calendar = load_business_calendar(_write(tmp_path, _local_artifact(timezone="Asia/Tokyo")))
+    timestamp = pd.Timestamp("2024-03-31T23:30:00Z")
+
+    assert calendar.adjust(timestamp, "FOLLOWING") == timestamp
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "message"),
+    [
+        ("2024-03-09T07:30:00Z", "ambiguous or nonexistent"),
+        ("2024-11-02T05:30:00Z", "ambiguous or nonexistent"),
+    ],
+)
+def test_local_calendar_fails_closed_for_dst_discontinuities(
+    tmp_path: Path,
+    timestamp: str,
+    message: str,
+) -> None:
+    calendar = load_business_calendar(_write(tmp_path, _local_artifact(weekend_days=[5])))
+
+    with pytest.raises(ValueError, match=message):
+        calendar.adjust(pd.Timestamp(timestamp), "FOLLOWING")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"tzdata_version": "system"}, "tzdata_version must be"),
+        ({"timezone": "../UTC"}, "canonical IANA name"),
+        ({"timezone": "Mars/Olympus_Mons"}, "not present in pinned tzdata"),
+    ],
+)
+def test_local_calendar_rejects_ungoverned_timezone_inputs(
+    tmp_path: Path,
+    mutation: dict[str, object],
+    message: str,
+) -> None:
+    artifact = _local_artifact()
+    artifact.update(mutation)
+
+    with pytest.raises(ValueError, match=message):
+        load_business_calendar(_write(tmp_path, artifact))
