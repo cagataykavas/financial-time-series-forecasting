@@ -81,7 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--settlement-calendar-json",
         type=Path,
-        help="digest-bound UTC business calendar for settlement accrual adjustment",
+        help=(
+            "digest-bound schema-v1 UTC or schema-v2 pinned local-time business calendar "
+            "for settlement accrual adjustment"
+        ),
     )
     parser.add_argument(
         "--max-fx-age-hours",

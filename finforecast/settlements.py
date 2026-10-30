@@ -67,6 +67,8 @@ class SettlementSnapshot:
     rate_calendar_id: str | None
     rate_calendar_revision_id: str | None
     rate_calendar_sha256: str | None
+    rate_calendar_timezone: str | None
+    rate_calendar_tzdata_version: str | None
     rate_roll_convention: str | None
     rate_day_count: str | None
     rate_max_age_seconds: float | None
@@ -113,6 +115,8 @@ class SettlementSnapshot:
             "rate_calendar_id": self.rate_calendar_id,
             "rate_calendar_revision_id": self.rate_calendar_revision_id,
             "rate_calendar_sha256": self.rate_calendar_sha256,
+            "rate_calendar_timezone": self.rate_calendar_timezone,
+            "rate_calendar_tzdata_version": self.rate_calendar_tzdata_version,
             "rate_roll_convention": self.rate_roll_convention,
             "rate_day_count": self.rate_day_count,
             "rate_max_age_seconds": self.rate_max_age_seconds,
@@ -486,6 +490,16 @@ def load_point_in_time_settlement(
             else None
         ),
         rate_calendar_sha256=rate_book.calendar_sha256 if rate_book else None,
+        rate_calendar_timezone=(
+            rate_book.business_calendar.timezone
+            if rate_book and rate_book.business_calendar
+            else None
+        ),
+        rate_calendar_tzdata_version=(
+            rate_book.business_calendar.tzdata_version
+            if rate_book and rate_book.business_calendar
+            else None
+        ),
         rate_roll_convention=rate_book.roll_convention if rate_book else None,
         rate_day_count=rate_book.day_count if rate_book else None,
         rate_max_age_seconds=rate_age.total_seconds() if rate_book else None,
@@ -498,7 +512,7 @@ def load_point_in_time_settlement(
         rate_lineage_sha256=rate_book.lineage_sha256 if rate_book else None,
         selected_events_sha256=_digest(
             {
-                "schema_version": 5,
+                "schema_version": 6,
                 "as_of": cutoff.isoformat(),
                 "price_currency": price_currency,
                 "fx_lineage_sha256": fx_book.lineage_sha256 if fx_book else None,
@@ -514,6 +528,16 @@ def load_point_in_time_settlement(
                     else None
                 ),
                 "rate_calendar_sha256": rate_book.calendar_sha256 if rate_book else None,
+                "rate_calendar_timezone": (
+                    rate_book.business_calendar.timezone
+                    if rate_book and rate_book.business_calendar
+                    else None
+                ),
+                "rate_calendar_tzdata_version": (
+                    rate_book.business_calendar.tzdata_version
+                    if rate_book and rate_book.business_calendar
+                    else None
+                ),
                 "rate_roll_convention": rate_book.roll_convention if rate_book else None,
                 "rate_day_count": rate_book.day_count if rate_book else None,
                 "rate_compounding": "continuous" if rate_book else None,
