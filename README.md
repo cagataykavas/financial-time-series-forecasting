@@ -311,17 +311,26 @@ report = require_calendar_migration(
 
 The manifest covers every date in the artifact at 00:00, 06:00, 12:00, and 18:00 UTC, committing
 the resulting local timestamp, UTC offset, business-day classification, and all supported roll
-outcomes into per-day SHA-256 digests. Coverage is bounded to 3,660 days. The migration gate
-requires the same calendar identity, timezone, coverage, probe schedule, holiday/weekend rules,
-and a different revision and tzdata version. Its observed behavior-change dates must exactly equal
-the sorted review allowlist: both an unapproved change and an expected-but-missing change fail
-closed. The report binds both manifests, the reviewed dates, findings, and decision into a
-deterministic evidence digest.
+outcomes into per-day SHA-256 digests. It also scans the pinned zone at bounded 15-minute UTC
+checkpoints, isolates each observed offset discontinuity to one second, and commits behavior at
+the second immediately before, at, and immediately after the transition. Transition evidence
+includes the local timestamp, UTC offset, PEP 495 fold, business-day classification, and every
+roll outcome. Coverage is bounded to 3,660 days and 512 transitions.
+
+The migration gate requires the same calendar identity, timezone, coverage, daily and transition
+probe policies, holiday/weekend rules, and a different revision and tzdata version. Its observed
+behavior-change dates must exactly equal the sorted review allowlist: both an unapproved change
+and an expected-but-missing change fail closed. Exact changed transition instants are retained in
+the privacy-reduced report, and both manifests, reviewed dates, findings, and decision are bound
+into a deterministic evidence digest. Transition-aware manifests use schema v2 and therefore need
+to be exported under the baseline runtime before the next tzdata upgrade.
 
 This is a bounded regression screen rather than a proof that all local wall-clock instants are
-unchanged; transition behavior between the four daily probes may require targeted golden vectors.
-Manifest digests provide integrity checks, not signer authentication, and the audit does not prove
-that the supplied holiday rules or timezone-law source are economically authoritative.
+unchanged. The transition scan detects offset states that persist to a 15-minute checkpoint; an
+offset change and reversal entirely within one scan window would require an independently supplied
+golden vector. Manifest digests provide integrity checks, not signer authentication, and the audit
+does not prove that the supplied holiday rules or timezone-law source are economically
+authoritative.
 
 This contract does not model withholding tax, execution spreads, non-cash consideration, exchange
 session hours, jurisdiction-specific observance rules beyond the supplied holiday set, ad-hoc
