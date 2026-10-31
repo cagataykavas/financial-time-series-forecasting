@@ -11,11 +11,14 @@ import pandas as pd
 
 from finforecast.business_calendar import SUPPORTED_ROLL_CONVENTIONS, BusinessCalendar
 
-CALENDAR_BEHAVIOR_SCHEMA = "finforecast-calendar-behavior/v1"
+CALENDAR_BEHAVIOR_SCHEMA = "finforecast-calendar-behavior/v2"
 CALENDAR_MIGRATION_SCHEMA = "finforecast-calendar-migration/v1"
 PROBE_UTC_HOURS = (0, 6, 12, 18)
+TRANSITION_SCAN_STEP_SECONDS = 900
+TRANSITION_PROBE_OFFSETS_SECONDS = (-1, 0, 1)
 _MAX_COVERAGE_DAYS = 3_660
 _MAX_APPROVED_CHANGED_DAYS = 366
+_MAX_TRANSITIONS = 512
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _MANIFEST_KEYS = frozenset(
@@ -28,8 +31,11 @@ _MANIFEST_KEYS = frozenset(
         "valid_from",
         "valid_through",
         "probe_utc_hours",
+        "transition_scan_step_seconds",
+        "transition_probe_offsets_seconds",
         "calendar_rules_sha256",
         "day_digests",
+        "transition_digests",
         "manifest_sha256",
     }
 )
@@ -101,33 +107,120 @@ def _rules_document(calendar: BusinessCalendar) -> dict[str, object]:
     }
 
 
+def _probe_instant(calendar: BusinessCalendar, instant: pd.Timestamp) -> dict[str, object]:
+    local = instant if calendar._zone is None else instant.tz_convert(calendar._zone)
+    local_date = local.date()
+    covered = calendar.valid_from <= local_date <= calendar.valid_through
+    adjustments: dict[str, str] = {}
+    for convention in sorted(SUPPORTED_ROLL_CONVENTIONS):
+        try:
+            adjustments[convention] = calendar.adjust(instant, convention).isoformat()
+        except ValueError:
+            adjustments[convention] = "REJECTED"
+    offset = local.utcoffset()
+    if offset is None:
+        raise CalendarMigrationError("calendar timezone produced no UTC offset")
+    return {
+        "instant_utc": instant.isoformat(),
+        "local_timestamp": local.isoformat(),
+        "local_date": local_date.isoformat(),
+        "utc_offset_seconds": int(offset.total_seconds()),
+        "fold": int(local.fold),
+        "business_day": calendar._is_business_day(local_date) if covered else None,
+        "adjustments": adjustments,
+    }
+
+
 def _probe_day(calendar: BusinessCalendar, probe_date: date) -> str:
-    rows: list[dict[str, object]] = []
-    for hour in PROBE_UTC_HOURS:
-        instant = pd.Timestamp(datetime.combine(probe_date, time(hour), tzinfo=UTC))
-        local = instant if calendar._zone is None else instant.tz_convert(calendar._zone)
-        local_date = local.date()
-        covered = calendar.valid_from <= local_date <= calendar.valid_through
-        adjustments: dict[str, str] = {}
-        for convention in sorted(SUPPORTED_ROLL_CONVENTIONS):
-            try:
-                adjustments[convention] = calendar.adjust(instant, convention).isoformat()
-            except ValueError:
-                adjustments[convention] = "REJECTED"
-        offset = local.utcoffset()
-        if offset is None:
-            raise CalendarMigrationError("calendar timezone produced no UTC offset")
-        rows.append(
-            {
-                "instant_utc": instant.isoformat(),
-                "local_timestamp": local.isoformat(),
-                "local_date": local_date.isoformat(),
-                "utc_offset_seconds": int(offset.total_seconds()),
-                "business_day": calendar._is_business_day(local_date) if covered else None,
-                "adjustments": adjustments,
-            }
-        )
-    return _digest(rows)
+    return _digest(
+        [
+            _probe_instant(
+                calendar,
+                pd.Timestamp(datetime.combine(probe_date, time(hour), tzinfo=UTC)),
+            )
+            for hour in PROBE_UTC_HOURS
+        ]
+    )
+
+
+def _offset_seconds(calendar: BusinessCalendar, instant: datetime) -> int:
+    if calendar._zone is None:
+        return 0
+    offset = instant.astimezone(calendar._zone).utcoffset()
+    if offset is None:
+        raise CalendarMigrationError("calendar timezone produced no UTC offset")
+    return int(offset.total_seconds())
+
+
+def _locate_transition(
+    calendar: BusinessCalendar,
+    left: datetime,
+    right: datetime,
+    left_offset: int,
+) -> datetime:
+    while (right - left).total_seconds() > 1:
+        middle = left + timedelta(seconds=int((right - left).total_seconds()) // 2)
+        if _offset_seconds(calendar, middle) == left_offset:
+            left = middle
+        else:
+            right = middle
+    if _offset_seconds(calendar, right - timedelta(seconds=1)) == _offset_seconds(calendar, right):
+        raise CalendarMigrationError("timezone transition boundary could not be isolated")
+    return right
+
+
+def _transition_scan_bounds(valid_from: date, valid_through: date) -> tuple[datetime, datetime]:
+    try:
+        start_date = valid_from - timedelta(days=2)
+        end_date = valid_through + timedelta(days=3)
+    except OverflowError as exc:
+        raise CalendarMigrationError(
+            "calendar coverage cannot support transition scanning"
+        ) from exc
+    return (
+        datetime.combine(start_date, time(), tzinfo=UTC),
+        datetime.combine(end_date, time(), tzinfo=UTC),
+    )
+
+
+def _calendar_transitions(calendar: BusinessCalendar) -> tuple[datetime, ...]:
+    if calendar._zone is None:
+        return ()
+    start, end = _transition_scan_bounds(calendar.valid_from, calendar.valid_through)
+    step = timedelta(seconds=TRANSITION_SCAN_STEP_SECONDS)
+    previous = start
+    previous_offset = _offset_seconds(calendar, previous)
+    cursor = previous + step
+    transitions: list[datetime] = []
+    while cursor <= end:
+        current_offset = _offset_seconds(calendar, cursor)
+        if current_offset != previous_offset:
+            transition = _locate_transition(calendar, previous, cursor, previous_offset)
+            before_local = (transition - timedelta(seconds=1)).astimezone(calendar._zone).date()
+            after_local = transition.astimezone(calendar._zone).date()
+            if any(
+                calendar.valid_from <= local_date <= calendar.valid_through
+                for local_date in (before_local, after_local)
+            ):
+                transitions.append(transition)
+                if len(transitions) > _MAX_TRANSITIONS:
+                    raise CalendarMigrationError("calendar contains too many timezone transitions")
+        previous = cursor
+        previous_offset = current_offset
+        cursor += step
+    return tuple(transitions)
+
+
+def _probe_transition(calendar: BusinessCalendar, transition: datetime) -> str:
+    return _digest(
+        [
+            _probe_instant(
+                calendar,
+                pd.Timestamp(transition + timedelta(seconds=offset)),
+            )
+            for offset in TRANSITION_PROBE_OFFSETS_SECONDS
+        ]
+    )
 
 
 def build_calendar_behavior_manifest(calendar: BusinessCalendar) -> dict[str, object]:
@@ -136,6 +229,8 @@ def build_calendar_behavior_manifest(calendar: BusinessCalendar) -> dict[str, ob
     if not isinstance(calendar, BusinessCalendar):
         raise TypeError("calendar must be a BusinessCalendar")
     coverage_days = _coverage_days(calendar.valid_from, calendar.valid_through)
+    if calendar._zone is not None:
+        _transition_scan_bounds(calendar.valid_from, calendar.valid_through)
     day_digests: list[dict[str, str]] = []
     for offset in range(coverage_days):
         probe_date = calendar.valid_from + timedelta(days=offset)
@@ -145,6 +240,23 @@ def build_calendar_behavior_manifest(calendar: BusinessCalendar) -> dict[str, ob
                 "sha256": _probe_day(calendar, probe_date),
             }
         )
+    transition_digests = [
+        {
+            "transition_utc": transition.isoformat(),
+            "local_dates": sorted(
+                {
+                    local_date.isoformat()
+                    for local_date in (
+                        (transition - timedelta(seconds=1)).astimezone(calendar._zone).date(),
+                        transition.astimezone(calendar._zone).date(),
+                    )
+                    if calendar.valid_from <= local_date <= calendar.valid_through
+                }
+            ),
+            "sha256": _probe_transition(calendar, transition),
+        }
+        for transition in _calendar_transitions(calendar)
+    ]
     document: dict[str, object] = {
         "schema_version": CALENDAR_BEHAVIOR_SCHEMA,
         "calendar_id": calendar.calendar_id,
@@ -154,8 +266,11 @@ def build_calendar_behavior_manifest(calendar: BusinessCalendar) -> dict[str, ob
         "valid_from": calendar.valid_from.isoformat(),
         "valid_through": calendar.valid_through.isoformat(),
         "probe_utc_hours": list(PROBE_UTC_HOURS),
+        "transition_scan_step_seconds": TRANSITION_SCAN_STEP_SECONDS,
+        "transition_probe_offsets_seconds": list(TRANSITION_PROBE_OFFSETS_SECONDS),
         "calendar_rules_sha256": _digest(_rules_document(calendar)),
         "day_digests": day_digests,
+        "transition_digests": transition_digests,
     }
     document["manifest_sha256"] = _digest(document)
     return document
@@ -188,6 +303,10 @@ def _validated_manifest(value: object) -> dict[str, object]:
     probe_hours = value.get("probe_utc_hours")
     if probe_hours != list(PROBE_UTC_HOURS):
         raise CalendarMigrationError("manifest probe schedule is unsupported")
+    if value.get("transition_scan_step_seconds") != TRANSITION_SCAN_STEP_SECONDS:
+        raise CalendarMigrationError("manifest transition scan step is unsupported")
+    if value.get("transition_probe_offsets_seconds") != list(TRANSITION_PROBE_OFFSETS_SECONDS):
+        raise CalendarMigrationError("manifest transition probe schedule is unsupported")
     for field in ("calendar_rules_sha256", "manifest_sha256"):
         item = value.get(field)
         if not isinstance(item, str) or _DIGEST_RE.fullmatch(item) is None:
@@ -205,6 +324,44 @@ def _validated_manifest(value: object) -> dict[str, object]:
         if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
             raise CalendarMigrationError("manifest day digest is invalid")
         expected_date += timedelta(days=1)
+    transition_digests = value.get("transition_digests")
+    if not isinstance(transition_digests, list) or len(transition_digests) > _MAX_TRANSITIONS:
+        raise CalendarMigrationError("manifest transition digests are not bounded")
+    previous_transition: datetime | None = None
+    earliest, latest = _transition_scan_bounds(valid_from, valid_through)
+    for row in transition_digests:
+        if not isinstance(row, dict) or set(row) != {"transition_utc", "local_dates", "sha256"}:
+            raise CalendarMigrationError("manifest transition digest row is invalid")
+        transition_value = row.get("transition_utc")
+        if not isinstance(transition_value, str):
+            raise CalendarMigrationError("manifest transition timestamp is invalid")
+        try:
+            transition = datetime.fromisoformat(transition_value)
+        except ValueError as exc:
+            raise CalendarMigrationError("manifest transition timestamp is invalid") from exc
+        if (
+            transition.tzinfo != UTC
+            or transition.microsecond != 0
+            or transition.isoformat() != transition_value
+            or not earliest <= transition < latest
+            or (previous_transition is not None and transition <= previous_transition)
+        ):
+            raise CalendarMigrationError("manifest transition timestamps are not canonical")
+        digest = row.get("sha256")
+        if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
+            raise CalendarMigrationError("manifest transition digest is invalid")
+        local_dates = row.get("local_dates")
+        if not isinstance(local_dates, list) or not 1 <= len(local_dates) <= 2:
+            raise CalendarMigrationError("manifest transition local dates are invalid")
+        parsed_local_dates = [
+            _canonical_date(local_date, "manifest transition local date")
+            for local_date in local_dates
+        ]
+        if local_dates != sorted(set(local_dates)) or any(
+            not valid_from <= local_date <= valid_through for local_date in parsed_local_dates
+        ):
+            raise CalendarMigrationError("manifest transition local dates are invalid")
+        previous_transition = transition
     document = dict(value)
     claimed = document.pop("manifest_sha256")
     if claimed != _digest(document):
@@ -267,6 +424,8 @@ def audit_calendar_migration(
         ("valid_from", "COVERAGE_MISMATCH"),
         ("valid_through", "COVERAGE_MISMATCH"),
         ("probe_utc_hours", "PROBE_SCHEDULE_MISMATCH"),
+        ("transition_scan_step_seconds", "TRANSITION_PROBE_POLICY_MISMATCH"),
+        ("transition_probe_offsets_seconds", "TRANSITION_PROBE_POLICY_MISMATCH"),
         ("calendar_rules_sha256", "CALENDAR_RULES_CHANGED"),
     )
     for field, code in comparisons:
@@ -284,6 +443,33 @@ def audit_calendar_migration(
     observed = tuple(
         sorted(
             day for day in set(old_days) | set(new_days) if old_days.get(day) != new_days.get(day)
+        )
+    )
+    old_transitions = {
+        row["transition_utc"]: (tuple(row["local_dates"]), row["sha256"])
+        for row in old["transition_digests"]  # type: ignore[index]
+    }
+    new_transitions = {
+        row["transition_utc"]: (tuple(row["local_dates"]), row["sha256"])
+        for row in new["transition_digests"]  # type: ignore[index]
+    }
+    changed_transitions = tuple(
+        sorted(
+            instant
+            for instant in set(old_transitions) | set(new_transitions)
+            if old_transitions.get(instant) != new_transitions.get(instant)
+        )
+    )
+    observed = tuple(
+        sorted(
+            set(observed)
+            | {
+                local_date
+                for instant in changed_transitions
+                for transition_map in (old_transitions, new_transitions)
+                if instant in transition_map
+                for local_date in transition_map[instant][0]
+            }
         )
     )
     unexpected = tuple(sorted(set(observed) - set(approved)))
@@ -304,6 +490,7 @@ def audit_calendar_migration(
         "candidate_manifest_sha256": new["manifest_sha256"],
         "approved_changed_dates": list(approved),
         "observed_changed_dates": list(observed),
+        "observed_changed_transition_utc": list(changed_transitions),
         "unexpected_changed_dates": list(unexpected),
         "missing_approved_changed_dates": list(missing),
         "accepted": not findings,
