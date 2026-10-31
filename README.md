@@ -282,6 +282,47 @@ timestamp; rolling can change only the accrual interval and cannot admit a futur
 Evidence binds the artifact digest, revision, timezone, tzdata release, roll convention, and both
 adjusted timestamps.
 
+Before changing the pinned tzdata dependency, export a behavior manifest with the old runtime and
+compare it with the candidate runtime:
+
+```python
+from pathlib import Path
+
+from finforecast.business_calendar import load_business_calendar
+from finforecast.calendar_migration import (
+    build_calendar_behavior_manifest,
+    dump_calendar_behavior_manifest,
+    load_calendar_behavior_manifest,
+    require_calendar_migration,
+)
+
+# Run before the dependency change and retain this reviewed baseline.
+baseline = build_calendar_behavior_manifest(load_business_calendar("settlement-calendar.json"))
+Path("calendar-behavior-baseline.json").write_bytes(dump_calendar_behavior_manifest(baseline))
+
+# Run after the dependency and calendar revision change.
+candidate = build_calendar_behavior_manifest(load_business_calendar("settlement-calendar.json"))
+report = require_calendar_migration(
+    load_calendar_behavior_manifest("calendar-behavior-baseline.json"),
+    candidate,
+    approved_changed_dates=["2027-04-01"],
+)
+```
+
+The manifest covers every date in the artifact at 00:00, 06:00, 12:00, and 18:00 UTC, committing
+the resulting local timestamp, UTC offset, business-day classification, and all supported roll
+outcomes into per-day SHA-256 digests. Coverage is bounded to 3,660 days. The migration gate
+requires the same calendar identity, timezone, coverage, probe schedule, holiday/weekend rules,
+and a different revision and tzdata version. Its observed behavior-change dates must exactly equal
+the sorted review allowlist: both an unapproved change and an expected-but-missing change fail
+closed. The report binds both manifests, the reviewed dates, findings, and decision into a
+deterministic evidence digest.
+
+This is a bounded regression screen rather than a proof that all local wall-clock instants are
+unchanged; transition behavior between the four daily probes may require targeted golden vectors.
+Manifest digests provide integrity checks, not signer authentication, and the audit does not prove
+that the supplied holiday rules or timezone-law source are economically authoritative.
+
 This contract does not model withholding tax, execution spreads, non-cash consideration, exchange
 session hours, jurisdiction-specific observance rules beyond the supplied holiday set, ad-hoc
 closures, collateral/funding basis, or distributions announced after the governed cutoff.
