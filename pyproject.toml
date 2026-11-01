@@ -9,6 +9,7 @@ description = "Leakage-safe probabilistic forecasting and model promotion refere
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "cryptography>=46.0",
   "fastapi>=0.116",
   "numpy>=2.0",
   "pandas>=2.2",
@@ -35,3 +36,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
