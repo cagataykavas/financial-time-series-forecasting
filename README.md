@@ -414,6 +414,38 @@ The conformal calibrator learns an absolute-residual radius from an **earlier ou
 
 This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
 
+### Market-regime coverage gate
+
+`audit_regime_coverage` checks interval coverage separately across a **predeclared** set of
+market regimes, such as `low-volatility`, `normal-volatility`, and `high-volatility`. Every label
+has an `as_of` timestamp and is rejected if it became available after forecast issuance. This
+prevents a realized outcome or later market state from selecting its own validation bucket.
+
+The gate uses one-sided Wilson lower confidence bounds with a Bonferroni allocation across the
+entire declared regime family. A release passes only when every regime has the minimum evidence
+count and its simultaneous lower bound clears `target_coverage - tolerated_shortfall`. Reports
+contain aggregate counts, tail misses, interval width, the exact policy, and a policy digest; raw
+forecasts, outcomes, and timestamps are intentionally omitted.
+
+```python
+from finforecast import RegimeCoveragePolicy, audit_regime_coverage
+
+policy = RegimeCoveragePolicy(
+    regimes=("high-volatility", "low-volatility", "normal-volatility"),
+    target_coverage=0.90,
+    tolerated_shortfall=0.05,
+    confidence_level=0.95,
+    min_observations_per_regime=100,
+)
+report = audit_regime_coverage(matured_intervals, policy)
+```
+
+Regime definitions and thresholds must be versioned before evaluation and derived only from
+information available at issuance. The confidence statement assumes independent Bernoulli
+coverage observations within each fixed regime; overlapping horizons and market dependence can
+make it optimistic. This gate therefore complements, rather than replaces, temporal monitoring,
+breach-dependence checks, delayed-label recalibration, and economic-loss validation.
+
 ## API and container
 
 ```bash

@@ -16,6 +16,12 @@ from .data import (
 from .engine import ForecastExperiment
 from .features import ForecastTargetSpec
 from .intervals import SplitConformalCalibrator
+from .regime_coverage import (
+    RegimeCoveragePolicy,
+    RegimeIntervalObservation,
+    audit_regime_coverage,
+    require_regime_coverage,
+)
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
@@ -30,14 +36,18 @@ __all__ = [
     "ForecastTargetSpec",
     "MarketData",
     "MarketDataSnapshot",
+    "RegimeCoveragePolicy",
+    "RegimeIntervalObservation",
     "SplitConformalCalibrator",
     "SettlementSnapshot",
     "WalkForwardConfig",
     "WalkForwardSplitter",
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
+    "audit_regime_coverage",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",
     "load_point_in_time_settlement",
+    "require_regime_coverage",
 ]
