@@ -58,6 +58,8 @@ Models are constructed and fitted inside the fold loop. The test index must be u
 finforecast/
 ├── backtest.py     # fold-local model execution and aggregation
 ├── baselines.py    # protocol and deterministic benchmark models
+├── calendar_migration.py # timezone-transition behavior and migration gate
+├── calendar_signing.py   # Ed25519 reviewed-baseline authentication
 ├── corporate_actions.py # point-in-time split/dividend/delisting evidence
 ├── fx.py                # governed point-in-time direct/bridged FX selection
 ├── data.py         # validated CSV loading and normalized data identity
@@ -325,11 +327,63 @@ the privacy-reduced report, and both manifests, reviewed dates, findings, and de
 into a deterministic evidence digest. Transition-aware manifests use schema v2 and therefore need
 to be exported under the baseline runtime before the next tzdata upgrade.
 
+The reviewed baseline can be authenticated before comparison with an Ed25519
+release signature:
+
+```python
+from finforecast.calendar_signing import (
+    KmsEd25519Signer,
+    create_calendar_baseline_signature,
+    require_signed_calendar_migration,
+)
+
+signer = KmsEd25519Signer(
+    kms_client,
+    kms_key_ref=kms_key_arn,
+    key_id="calendar-release-key-2026",
+)
+baseline_signature = create_calendar_baseline_signature(
+    baseline,
+    source_commit_sha=release_commit_sha,
+    issued_at_epoch=release_epoch,
+    signer=signer,
+)
+
+# Store signer.public_key_der in the independently reviewed release policy.
+evidence = require_signed_calendar_migration(
+    baseline_signature,
+    baseline,
+    candidate,
+    trusted_public_keys={signer.key_id: trusted_public_key_der},
+    expected_source_commit_sha=release_commit_sha,
+    approved_changed_dates=["2027-04-01"],
+)
+```
+
+The signature binds the exact canonical schema-v2 manifest bytes, its embedded
+digest, calendar/revision/tzdata identity, reviewed source commit, issue time,
+logical key ID, and SHA-256 revision of the DER public key. The AWS KMS adapter
+exports and validates the public key before signing and uses `MessageType=RAW`
+with `ED25519_SHA_512`; verification is offline and does not require KMS or
+private-key access. Migration comparison starts only after the signature,
+trusted key revision, source commit, and supplied baseline all verify. The
+retained signed-migration evidence carries the baseline signer identity and the
+original migration report under one deterministic digest.
+
+A valid signature authenticates custody and detects substitution; it does not
+prove that the calendar rules are economically authoritative, that the signer
+approved them through a specific human process, or that the issue time came
+from a trusted timestamp authority. Keep the trusted public key and reviewed
+source commit in a separately controlled release policy, rotate key IDs rather
+than silently replacing key material, and retain the signature document beside
+the baseline.
+
 This is a bounded regression screen rather than a proof that all local wall-clock instants are
 unchanged. The transition scan detects offset states that persist to a 15-minute checkpoint; an
 offset change and reversal entirely within one scan window would require an independently supplied
-golden vector. Manifest digests provide integrity checks, not signer authentication, and the audit
-does not prove that the supplied holiday rules or timezone-law source are economically
+golden vector. Unsigned manifest digests provide integrity checks, not signer authentication, and
+neither the migration audit nor its optional signature proves that the supplied holiday rules or
+timezone-law source are economically
 authoritative.
 
 This contract does not model withholding tax, execution spreads, non-cash consideration, exchange
@@ -395,3 +449,4 @@ calendars, execution delay, slippage/impact, nested historical tuning and live c
 
 Those are explicit boundaries because a credible financial ML project should make invalid
 conclusions difficult—not merely make charts attractive.
+
