@@ -22,6 +22,12 @@ from .regime_coverage import (
     audit_regime_coverage,
     require_regime_coverage,
 )
+from .regime_labeling import (
+    PointInTimeReturn,
+    VolatilityRegimeAssignment,
+    VolatilityRegimeDefinition,
+    assign_point_in_time_volatility_regimes,
+)
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
@@ -36,15 +42,19 @@ __all__ = [
     "ForecastTargetSpec",
     "MarketData",
     "MarketDataSnapshot",
+    "PointInTimeReturn",
     "RegimeCoveragePolicy",
     "RegimeIntervalObservation",
     "SplitConformalCalibrator",
     "SettlementSnapshot",
+    "VolatilityRegimeAssignment",
+    "VolatilityRegimeDefinition",
     "WalkForwardConfig",
     "WalkForwardSplitter",
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "audit_regime_coverage",
+    "assign_point_in_time_volatility_regimes",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",

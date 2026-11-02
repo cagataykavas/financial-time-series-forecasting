@@ -446,6 +446,48 @@ coverage observations within each fixed regime; overlapping horizons and market 
 make it optimistic. This gate therefore complements, rather than replaces, temporal monitoring,
 breach-dependence checks, delayed-label recalibration, and economic-loss validation.
 
+#### Point-in-time volatility labels
+
+`assign_point_in_time_volatility_regimes` makes that regime-definition requirement executable.
+It selects the latest revision for each observation that was actually available at forecast
+issuance, excludes observations at or after issuance, and computes annualized sample volatility
+over an exact trailing window. The definition manifest commits to its publication time, immutable
+revision, source-schema digest, window, annualization factor, thresholds, and boundary policy.
+
+```python
+from datetime import UTC, datetime
+
+from finforecast import (
+    PointInTimeReturn,
+    VolatilityRegimeDefinition,
+    assign_point_in_time_volatility_regimes,
+)
+
+definition = VolatilityRegimeDefinition(
+    definition_id="daily-realized-volatility-v1",
+    revision="8c42f0d82e9895038541aa62a2dc69ce5c4fbe65",
+    published_at=datetime(2025, 12, 1, tzinfo=UTC),
+    source_schema_sha256="4a" * 32,
+    window_observations=20,
+    annualization_periods=252,
+    low_volatility_upper=0.10,
+    normal_volatility_upper=0.25,
+)
+assignments = assign_point_in_time_volatility_regimes(
+    return_revisions,
+    forecast_issuances,
+    definition,
+    expected_definition_sha256=definition.sha256,
+)
+```
+
+Each assignment records the label availability time plus digests of the definition, selected
+source window, and final evidence document. It intentionally omits individual return values and
+revision identifiers; use `assignment.regime` and `assignment.regime_as_of_datetime` when building
+a `RegimeIntervalObservation`. Thresholds remain governance choices, and caller-supplied vendor
+availability metadata is not independently authenticated. Realized volatility is descriptive—not
+a tradable signal—and fixed windows do not remove dependence or regime-instability risk.
+
 ## API and container
 
 ```bash
@@ -481,4 +523,5 @@ calendars, execution delay, slippage/impact, nested historical tuning and live c
 
 Those are explicit boundaries because a credible financial ML project should make invalid
 conclusions difficult—not merely make charts attractive.
+
 
