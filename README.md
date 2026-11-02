@@ -481,12 +481,53 @@ assignments = assign_point_in_time_volatility_regimes(
 )
 ```
 
+For governed evaluation, authenticate the complete ordered revision stream before labeling:
+
+```python
+from finforecast import (
+    assign_authenticated_point_in_time_volatility_regimes,
+    create_return_revision_snapshot_signature,
+)
+
+snapshot_signature = create_return_revision_snapshot_signature(
+    return_revisions,
+    vendor_id="market-data-provider",
+    dataset_id="daily-total-returns",
+    snapshot_id="2026-01-10T000000Z-r1",
+    issued_at_epoch=1_799_000_000,
+    source_schema_sha256=definition.source_schema_sha256,
+    signer=vendor_release_signer,
+)
+assignments, authentication_evidence = assign_authenticated_point_in_time_volatility_regimes(
+    return_revisions,
+    forecast_issuances,
+    definition,
+    snapshot_signature,
+    expected_definition_sha256=definition.sha256,
+    trusted_public_keys={vendor_release_signer.key_id: pinned_public_key_der},
+    expected_vendor_id="market-data-provider",
+    expected_dataset_id="daily-total-returns",
+    expected_snapshot_id="2026-01-10T000000Z-r1",
+)
+```
+
+The signature binds the source identity, schema digest, record count, and a canonical commitment
+over every ordered observation time, availability time, revision identifier, and exact float
+value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision
+before regime assignment. The retained authentication evidence contains only identities, counts,
+and digests; it does not copy returns or revision identifiers.
+
 Each assignment records the label availability time plus digests of the definition, selected
 source window, and final evidence document. It intentionally omits individual return values and
 revision identifiers; use `assignment.regime` and `assignment.regime_as_of_datetime` when building
-a `RegimeIntervalObservation`. Thresholds remain governance choices, and caller-supplied vendor
-availability metadata is not independently authenticated. Realized volatility is descriptive—not
-a tradable signal—and fixed windows do not remove dependence or regime-instability risk.
+a `RegimeIntervalObservation`. The direct assignment function remains suitable for untrusted local
+analysis; use the authenticated wrapper at a release boundary. Thresholds remain governance
+choices. A valid signature authenticates the holder of the governed key, not the economic
+correctness of returns, the truth of historical availability metadata, or an independent timestamp.
+It also cannot prevent a trusted producer from equivocating by signing conflicting snapshots under
+the same identity; governed retention or a transparency log is still required. Realized volatility
+is descriptive—not a tradable signal—and fixed windows do not remove dependence or
+regime-instability risk.
 
 ## API and container
 
