@@ -15,6 +15,7 @@ from statistics import stdev
 
 VOLATILITY_REGIME_DEFINITION_SCHEMA = "finforecast-volatility-regime-definition/v1"
 VOLATILITY_REGIME_ASSIGNMENT_SCHEMA = "finforecast-volatility-regime-assignment/v1"
+RETURN_REVISION_STREAM_COMMITMENT_SCHEMA = "finforecast-return-revision-stream/v1"
 LOW_VOLATILITY = "low-volatility"
 NORMAL_VOLATILITY = "normal-volatility"
 HIGH_VOLATILITY = "high-volatility"
@@ -155,6 +156,18 @@ class PointInTimeReturn:
 
 
 @dataclass(frozen=True, slots=True)
+class ReturnRevisionStreamCommitment:
+    """Privacy-reduced commitment to one exact, validated revision stream."""
+
+    schema_version: str
+    record_count: int
+    records_sha256: str
+
+    def to_audit_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class VolatilityRegimeAssignment:
     schema_version: str
     issued_at: str
@@ -237,6 +250,30 @@ def _validated_issuances(values: Sequence[datetime]) -> list[datetime]:
     ):
         raise RegimeLabelingError("issuances must be strictly increasing")
     return normalized
+
+
+def commit_point_in_time_returns(
+    rows: Sequence[PointInTimeReturn],
+) -> ReturnRevisionStreamCommitment:
+    """Commit the complete ordered revision stream without retaining its values."""
+
+    normalized = _validated_returns(rows)
+    records_sha256 = _digest(
+        [
+            {
+                "observed_at": _timestamp(observed_at),
+                "available_at": _timestamp(available_at),
+                "revision_id": revision_id,
+                "value_hex": value.hex(),
+            }
+            for observed_at, available_at, revision_id, value in normalized
+        ]
+    )
+    return ReturnRevisionStreamCommitment(
+        schema_version=RETURN_REVISION_STREAM_COMMITMENT_SCHEMA,
+        record_count=len(normalized),
+        records_sha256=records_sha256,
+    )
 
 
 def _activate_return(

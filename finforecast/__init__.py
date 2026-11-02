@@ -24,9 +24,19 @@ from .regime_coverage import (
 )
 from .regime_labeling import (
     PointInTimeReturn,
+    ReturnRevisionStreamCommitment,
     VolatilityRegimeAssignment,
     VolatilityRegimeDefinition,
     assign_point_in_time_volatility_regimes,
+    commit_point_in_time_returns,
+)
+from .regime_source import (
+    ReturnRevisionSnapshotSignature,
+    assign_authenticated_point_in_time_volatility_regimes,
+    create_return_revision_snapshot_signature,
+    dump_return_revision_snapshot_signature,
+    load_return_revision_snapshot_signature,
+    verify_return_revision_snapshot_signature,
 )
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
 from .splits import WalkForwardConfig, WalkForwardSplitter
@@ -45,6 +55,8 @@ __all__ = [
     "PointInTimeReturn",
     "RegimeCoveragePolicy",
     "RegimeIntervalObservation",
+    "ReturnRevisionSnapshotSignature",
+    "ReturnRevisionStreamCommitment",
     "SplitConformalCalibrator",
     "SettlementSnapshot",
     "VolatilityRegimeAssignment",
@@ -54,10 +66,16 @@ __all__ = [
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "audit_regime_coverage",
+    "assign_authenticated_point_in_time_volatility_regimes",
     "assign_point_in_time_volatility_regimes",
+    "commit_point_in_time_returns",
+    "create_return_revision_snapshot_signature",
+    "dump_return_revision_snapshot_signature",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",
     "load_point_in_time_settlement",
+    "load_return_revision_snapshot_signature",
     "require_regime_coverage",
+    "verify_return_revision_snapshot_signature",
 ]
