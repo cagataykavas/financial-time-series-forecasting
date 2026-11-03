@@ -43,6 +43,17 @@ from .snapshot_observation import (
     SnapshotObservationReceipt,
     verify_and_record_return_revision_snapshot,
 )
+from .snapshot_transparency import (
+    SnapshotTransparencyCheckpoint,
+    SnapshotTransparencyProof,
+    create_snapshot_transparency_checkpoint,
+    create_snapshot_transparency_proof,
+    dump_snapshot_transparency_checkpoint,
+    dump_snapshot_transparency_proof,
+    load_snapshot_transparency_checkpoint,
+    load_snapshot_transparency_proof,
+    verify_snapshot_transparency_inclusion,
+)
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 __version__ = "2.1.0"
@@ -64,6 +75,8 @@ __all__ = [
     "SplitConformalCalibrator",
     "SettlementSnapshot",
     "SnapshotObservationReceipt",
+    "SnapshotTransparencyCheckpoint",
+    "SnapshotTransparencyProof",
     "VolatilityRegimeAssignment",
     "VolatilityRegimeDefinition",
     "WalkForwardConfig",
@@ -75,13 +88,20 @@ __all__ = [
     "assign_point_in_time_volatility_regimes",
     "commit_point_in_time_returns",
     "create_return_revision_snapshot_signature",
+    "create_snapshot_transparency_checkpoint",
+    "create_snapshot_transparency_proof",
     "dump_return_revision_snapshot_signature",
+    "dump_snapshot_transparency_checkpoint",
+    "dump_snapshot_transparency_proof",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",
     "load_point_in_time_settlement",
     "load_return_revision_snapshot_signature",
+    "load_snapshot_transparency_checkpoint",
+    "load_snapshot_transparency_proof",
     "require_regime_coverage",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
+    "verify_snapshot_transparency_inclusion",
 ]
