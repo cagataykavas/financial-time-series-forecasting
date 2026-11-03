@@ -4,10 +4,16 @@ import copy
 import hashlib
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from finforecast.regime_labeling import PointInTimeReturn
+from finforecast.regime_source import create_return_revision_snapshot_signature
+from finforecast.snapshot_observation import verify_and_record_return_revision_snapshot
 from finforecast.snapshot_transparency import (
     SNAPSHOT_TRANSPARENCY_CHECKPOINT_SCHEMA,
     SNAPSHOT_TRANSPARENCY_VERIFICATION_SCHEMA,
@@ -20,11 +26,62 @@ from finforecast.snapshot_transparency import (
     load_snapshot_transparency_proof,
     verify_snapshot_transparency_inclusion,
 )
-from tests.test_snapshot_observation import _OBSERVED_AT, _record, _rows, _Signer
 
+_SCHEMA_DIGEST = "a" * 64
+_OBSERVED_AT = 1_799_000_100
 _LOG_ID = "market-data-observation-log"
 _CHECKPOINT_ID = "checkpoint-2026-11-03-001"
 _CHECKPOINT_EPOCH = _OBSERVED_AT + 60
+
+
+class _Signer:
+    key_id = "vendor-key-2026"
+
+    def __init__(self) -> None:
+        self.private_key = Ed25519PrivateKey.generate()
+        self.public_key_der = self.private_key.public_key().public_bytes(
+            Encoding.DER,
+            PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    def sign(self, message: bytes) -> bytes:
+        return self.private_key.sign(message)
+
+
+def _rows() -> list[PointInTimeReturn]:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    return [
+        PointInTimeReturn(
+            observed_at=start + timedelta(days=position),
+            available_at=start + timedelta(days=position, hours=1),
+            revision_id=f"private-revision-{position}",
+            value=value,
+        )
+        for position, value in enumerate((-0.1, 0.0, 0.1))
+    ]
+
+
+def _record(path: Path, rows: list[PointInTimeReturn], signer: _Signer, *, observed_at: int):
+    signature = create_return_revision_snapshot_signature(
+        rows,
+        vendor_id="vendor.example",
+        dataset_id="daily-total-returns",
+        snapshot_id="2026-01-10-r1",
+        issued_at_epoch=1_799_000_000,
+        source_schema_sha256=_SCHEMA_DIGEST,
+        signer=signer,
+    )
+    return verify_and_record_return_revision_snapshot(
+        signature,
+        rows,
+        trusted_public_keys={signer.key_id: signer.public_key_der},
+        expected_vendor_id="vendor.example",
+        expected_dataset_id="daily-total-returns",
+        expected_snapshot_id="2026-01-10-r1",
+        expected_source_schema_sha256=_SCHEMA_DIGEST,
+        ledger_path=path,
+        observed_at_epoch=observed_at,
+    )
 
 
 def _entry(label: str) -> str:
