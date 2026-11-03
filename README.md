@@ -511,6 +511,36 @@ assignments, authentication_evidence = assign_authenticated_point_in_time_volati
 )
 ```
 
+At ingestion, record the first verified commitment for each governed snapshot identity in a
+local observation ledger:
+
+```python
+from finforecast import verify_and_record_return_revision_snapshot
+
+observation_receipt = verify_and_record_return_revision_snapshot(
+    snapshot_signature,
+    return_revisions,
+    trusted_public_keys={vendor_release_signer.key_id: pinned_public_key_der},
+    expected_vendor_id="market-data-provider",
+    expected_dataset_id="daily-total-returns",
+    expected_snapshot_id="2026-01-10T000000Z-r1",
+    expected_source_schema_sha256=definition.source_schema_sha256,
+    ledger_path="/var/lib/finforecast/snapshot-observations.sqlite3",
+    observed_at_epoch=trusted_ingestion_epoch,
+)
+```
+
+The transaction-safe SQLite ledger uses a privacy-reduced digest of vendor, dataset, and snapshot
+as its key. The first fully verified signature document becomes immutable through this API;
+identical concurrent or later observations are idempotent, while a different verified commitment
+under the same identity fails closed. New ledgers are mode `0600`; symlinks, broad permissions,
+unrecognized database schemas, corrupt entry digests, and conflicting commitments are rejected.
+Keep the ledger in an operator-controlled local directory and back it up as governed evidence.
+`observed_at_epoch` is recorded as supplied and is not a trusted timestamp by itself. SQLite and
+the entry digest detect accidental corruption but do not stop an administrator from replacing or
+rewriting the database; independently controlled immutable retention or a transparency service is
+still required for cross-operator equivocation detection.
+
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
 value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision
@@ -524,10 +554,10 @@ a `RegimeIntervalObservation`. The direct assignment function remains suitable f
 analysis; use the authenticated wrapper at a release boundary. Thresholds remain governance
 choices. A valid signature authenticates the holder of the governed key, not the economic
 correctness of returns, the truth of historical availability metadata, or an independent timestamp.
-It also cannot prevent a trusted producer from equivocating by signing conflicting snapshots under
-the same identity; governed retention or a transparency log is still required. Realized volatility
-is descriptive—not a tradable signal—and fixed windows do not remove dependence or
-regime-instability risk.
+The local observation ledger detects conflicting reuse of an identity after the first observation,
+but it cannot detect a producer showing different first versions to isolated operators. Governed
+retention or a shared transparency log is still required. Realized volatility is descriptive—not a
+tradable signal—and fixed windows do not remove dependence or regime-instability risk.
 
 ## API and container
 
