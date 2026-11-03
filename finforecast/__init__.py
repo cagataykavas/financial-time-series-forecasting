@@ -39,6 +39,10 @@ from .regime_source import (
     verify_return_revision_snapshot_signature,
 )
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
+from .snapshot_observation import (
+    SnapshotObservationReceipt,
+    verify_and_record_return_revision_snapshot,
+)
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 __version__ = "2.1.0"
@@ -59,6 +63,7 @@ __all__ = [
     "ReturnRevisionStreamCommitment",
     "SplitConformalCalibrator",
     "SettlementSnapshot",
+    "SnapshotObservationReceipt",
     "VolatilityRegimeAssignment",
     "VolatilityRegimeDefinition",
     "WalkForwardConfig",
@@ -78,4 +83,5 @@ __all__ = [
     "load_return_revision_snapshot_signature",
     "require_regime_coverage",
     "verify_return_revision_snapshot_signature",
+    "verify_and_record_return_revision_snapshot",
 ]
