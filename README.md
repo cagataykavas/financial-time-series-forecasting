@@ -541,6 +541,41 @@ the entry digest detect accidental corruption but do not stop an administrator f
 rewriting the database; independently controlled immutable retention or a transparency service is
 still required for cross-operator equivocation detection.
 
+Before promoting a model, an operator can require proof that the privacy-reduced observation entry
+was published in an independently signed transparency checkpoint:
+
+```python
+from finforecast import (
+    load_snapshot_transparency_checkpoint,
+    load_snapshot_transparency_proof,
+    verify_snapshot_transparency_inclusion,
+)
+
+checkpoint = load_snapshot_transparency_checkpoint(checkpoint_bytes)
+inclusion_proof = load_snapshot_transparency_proof(inclusion_proof_bytes)
+transparency_evidence = verify_snapshot_transparency_inclusion(
+    observation_receipt,
+    checkpoint,
+    inclusion_proof,
+    trusted_public_keys={transparency_key_id: pinned_transparency_public_key_der},
+    expected_log_id="market-data-observation-log",
+    expected_checkpoint_id="checkpoint-2026-11-03-001",
+)
+```
+
+The verifier is offline and dependency-light: it authenticates a canonical Ed25519-signed
+checkpoint, pins the governed log and checkpoint identities plus the exact key revision, and
+recomputes a domain-separated CT-style Merkle path over the local `entry_sha256`. It rejects
+duplicate log entries, non-canonical checkpoint JSON, malformed or overlong evidence, extra proof
+nodes, a checkpoint older than the local observation, and any root or signature mismatch. Retained
+verification evidence contains digests, tree size, and leaf index rather than vendor identifiers,
+return values, or revision IDs. `issued_at_epoch` is still an operator assertion, not an independent
+trusted timestamp.
+
+Inclusion in one signed checkpoint does **not** prove that later checkpoints extend the same tree.
+A production log should distribute checkpoints independently and require consistency proofs or
+witness cosigning to detect split views; this module deliberately makes no stronger claim.
+
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
 value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision
