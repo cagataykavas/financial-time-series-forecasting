@@ -62,6 +62,15 @@ from .snapshot_transparency import (
     load_snapshot_transparency_proof,
     verify_snapshot_transparency_inclusion,
 )
+from .snapshot_witness import (
+    SnapshotConsistencyWitnessApproval,
+    SnapshotConsistencyWitnessBundle,
+    create_snapshot_consistency_witness_bundle,
+    dump_snapshot_consistency_witness_bundle,
+    load_snapshot_consistency_witness_bundle,
+    verify_snapshot_consistency_witness_bundle,
+    verify_witnessed_snapshot_transparency_promotion,
+)
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
 __version__ = "2.1.0"
@@ -83,6 +92,8 @@ __all__ = [
     "SplitConformalCalibrator",
     "SettlementSnapshot",
     "SnapshotObservationReceipt",
+    "SnapshotConsistencyWitnessApproval",
+    "SnapshotConsistencyWitnessBundle",
     "SnapshotTransparencyConsistencyProof",
     "SnapshotTransparencyCheckpoint",
     "SnapshotTransparencyProof",
@@ -100,10 +111,12 @@ __all__ = [
     "create_snapshot_transparency_checkpoint",
     "create_snapshot_transparency_consistency_proof",
     "create_snapshot_transparency_proof",
+    "create_snapshot_consistency_witness_bundle",
     "dump_return_revision_snapshot_signature",
     "dump_snapshot_transparency_checkpoint",
     "dump_snapshot_transparency_consistency_proof",
     "dump_snapshot_transparency_proof",
+    "dump_snapshot_consistency_witness_bundle",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",
@@ -112,10 +125,13 @@ __all__ = [
     "load_snapshot_transparency_checkpoint",
     "load_snapshot_transparency_consistency_proof",
     "load_snapshot_transparency_proof",
+    "load_snapshot_consistency_witness_bundle",
     "require_regime_coverage",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
     "verify_snapshot_transparency_append_only_inclusion",
     "verify_snapshot_transparency_consistency",
     "verify_snapshot_transparency_inclusion",
+    "verify_snapshot_consistency_witness_bundle",
+    "verify_witnessed_snapshot_transparency_promotion",
 ]
