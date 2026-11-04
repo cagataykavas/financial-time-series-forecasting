@@ -22,6 +22,9 @@ from finforecast.snapshot_observation import (
 )
 
 SNAPSHOT_TRANSPARENCY_CHECKPOINT_SCHEMA = "finforecast-snapshot-transparency-checkpoint/v1"
+SNAPSHOT_TRANSPARENCY_CHECKPOINT_AUTH_SCHEMA = (
+    "finforecast-snapshot-transparency-checkpoint-authentication/v1"
+)
 SNAPSHOT_TRANSPARENCY_PROOF_SCHEMA = "finforecast-snapshot-transparency-proof/v1"
 SNAPSHOT_TRANSPARENCY_VERIFICATION_SCHEMA = "finforecast-snapshot-transparency-verification/v1"
 SNAPSHOT_TRANSPARENCY_PURPOSE = "snapshot-observation-transparency-checkpoint"
@@ -381,31 +384,23 @@ def _verify_inclusion(
         raise SnapshotTransparencyError("inclusion proof does not match the checkpoint")
 
 
-def verify_snapshot_transparency_inclusion(
-    receipt: SnapshotObservationReceipt,
+def authenticate_snapshot_transparency_checkpoint(
     checkpoint: SnapshotTransparencyCheckpoint,
-    proof: SnapshotTransparencyProof,
     *,
     trusted_public_keys: Mapping[str, bytes],
     expected_log_id: str,
     expected_checkpoint_id: str,
 ) -> dict[str, object]:
-    """Authenticate a checkpoint and prove one local observation entry is included."""
+    """Authenticate one governed checkpoint without making an inclusion claim."""
 
-    receipt_document = _validate_observation_receipt(receipt)
     _validate_checkpoint(checkpoint)
-    if not isinstance(proof, SnapshotTransparencyProof):
-        raise TypeError("proof must be a SnapshotTransparencyProof")
-    if (
-        not hmac.compare_digest(checkpoint.log_id, _identifier(expected_log_id, "expected_log_id"))
-        or not hmac.compare_digest(
-            checkpoint.checkpoint_id,
-            _identifier(expected_checkpoint_id, "expected_checkpoint_id"),
-        )
-        or checkpoint.tree_size != proof.tree_size
-        or checkpoint.issued_at_epoch < receipt.first_observed_at_epoch
+    if not hmac.compare_digest(
+        checkpoint.log_id, _identifier(expected_log_id, "expected_log_id")
+    ) or not hmac.compare_digest(
+        checkpoint.checkpoint_id,
+        _identifier(expected_checkpoint_id, "expected_checkpoint_id"),
     ):
-        raise SnapshotTransparencyError("checkpoint does not match governance or proof")
+        raise SnapshotTransparencyError("checkpoint does not match governance")
     if not isinstance(trusted_public_keys, Mapping) or checkpoint.key_id not in trusted_public_keys:
         raise SnapshotTransparencyError("trusted checkpoint key is unavailable")
     public_key_der = trusted_public_keys[checkpoint.key_id]
@@ -418,6 +413,48 @@ def verify_snapshot_transparency_inclusion(
         public_key.verify(_decode_signature(checkpoint.signature), _message(_unsigned(checkpoint)))
     except InvalidSignature as exc:
         raise SnapshotTransparencyError("checkpoint signature does not verify") from exc
+    authentication: dict[str, object] = {
+        "schema_version": SNAPSHOT_TRANSPARENCY_CHECKPOINT_AUTH_SCHEMA,
+        "authenticated": True,
+        "log_id_sha256": hashlib.sha256(checkpoint.log_id.encode("ascii")).hexdigest(),
+        "checkpoint_id_sha256": hashlib.sha256(
+            checkpoint.checkpoint_id.encode("ascii")
+        ).hexdigest(),
+        "checkpoint_sha256": checkpoint.checkpoint_sha256,
+        "tree_size": checkpoint.tree_size,
+        "root_sha256": checkpoint.root_sha256,
+        "issued_at_epoch": checkpoint.issued_at_epoch,
+        "public_key_sha256": checkpoint.public_key_sha256,
+    }
+    authentication["authentication_sha256"] = _digest(authentication)
+    return authentication
+
+
+def verify_snapshot_transparency_inclusion(
+    receipt: SnapshotObservationReceipt,
+    checkpoint: SnapshotTransparencyCheckpoint,
+    proof: SnapshotTransparencyProof,
+    *,
+    trusted_public_keys: Mapping[str, bytes],
+    expected_log_id: str,
+    expected_checkpoint_id: str,
+) -> dict[str, object]:
+    """Authenticate a checkpoint and prove one local observation entry is included."""
+
+    receipt_document = _validate_observation_receipt(receipt)
+    authentication = authenticate_snapshot_transparency_checkpoint(
+        checkpoint,
+        trusted_public_keys=trusted_public_keys,
+        expected_log_id=expected_log_id,
+        expected_checkpoint_id=expected_checkpoint_id,
+    )
+    if not isinstance(proof, SnapshotTransparencyProof):
+        raise TypeError("proof must be a SnapshotTransparencyProof")
+    if (
+        checkpoint.tree_size != proof.tree_size
+        or checkpoint.issued_at_epoch < receipt.first_observed_at_epoch
+    ):
+        raise SnapshotTransparencyError("checkpoint does not match governance or proof")
     _verify_inclusion(receipt.entry_sha256, proof, checkpoint.root_sha256)
     verification: dict[str, object] = {
         "schema_version": SNAPSHOT_TRANSPARENCY_VERIFICATION_SCHEMA,
@@ -435,6 +472,7 @@ def verify_snapshot_transparency_inclusion(
         "root_sha256": checkpoint.root_sha256,
         "issued_at_epoch": checkpoint.issued_at_epoch,
         "public_key_sha256": checkpoint.public_key_sha256,
+        "checkpoint_authentication_sha256": authentication["authentication_sha256"],
     }
     verification["verification_sha256"] = _digest(verification)
     return verification
