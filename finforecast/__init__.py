@@ -39,6 +39,14 @@ from .regime_source import (
     verify_return_revision_snapshot_signature,
 )
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
+from .snapshot_consistency import (
+    SnapshotTransparencyConsistencyProof,
+    create_snapshot_transparency_consistency_proof,
+    dump_snapshot_transparency_consistency_proof,
+    load_snapshot_transparency_consistency_proof,
+    verify_snapshot_transparency_append_only_inclusion,
+    verify_snapshot_transparency_consistency,
+)
 from .snapshot_observation import (
     SnapshotObservationReceipt,
     verify_and_record_return_revision_snapshot,
@@ -75,6 +83,7 @@ __all__ = [
     "SplitConformalCalibrator",
     "SettlementSnapshot",
     "SnapshotObservationReceipt",
+    "SnapshotTransparencyConsistencyProof",
     "SnapshotTransparencyCheckpoint",
     "SnapshotTransparencyProof",
     "VolatilityRegimeAssignment",
@@ -89,9 +98,11 @@ __all__ = [
     "commit_point_in_time_returns",
     "create_return_revision_snapshot_signature",
     "create_snapshot_transparency_checkpoint",
+    "create_snapshot_transparency_consistency_proof",
     "create_snapshot_transparency_proof",
     "dump_return_revision_snapshot_signature",
     "dump_snapshot_transparency_checkpoint",
+    "dump_snapshot_transparency_consistency_proof",
     "dump_snapshot_transparency_proof",
     "load_market_csv",
     "load_business_calendar",
@@ -99,9 +110,12 @@ __all__ = [
     "load_point_in_time_settlement",
     "load_return_revision_snapshot_signature",
     "load_snapshot_transparency_checkpoint",
+    "load_snapshot_transparency_consistency_proof",
     "load_snapshot_transparency_proof",
     "require_regime_coverage",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
+    "verify_snapshot_transparency_append_only_inclusion",
+    "verify_snapshot_transparency_consistency",
     "verify_snapshot_transparency_inclusion",
 ]

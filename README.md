@@ -573,8 +573,41 @@ return values, or revision IDs. `issued_at_epoch` is still an operator assertion
 trusted timestamp.
 
 Inclusion in one signed checkpoint does **not** prove that later checkpoints extend the same tree.
-A production log should distribute checkpoints independently and require consistency proofs or
-witness cosigning to detect split views; this module deliberately makes no stronger claim.
+Require an authenticated consistency proof from an independently retained earlier checkpoint at
+the promotion boundary:
+
+```python
+from finforecast import (
+    load_snapshot_transparency_consistency_proof,
+    verify_snapshot_transparency_append_only_inclusion,
+)
+
+consistency_proof = load_snapshot_transparency_consistency_proof(proof_bytes)
+promotion_evidence = verify_snapshot_transparency_append_only_inclusion(
+    observation_receipt,
+    independently_retained_old_checkpoint,
+    candidate_new_checkpoint,
+    consistency_proof,
+    inclusion_proof,
+    trusted_public_keys=governed_log_key_revisions,
+    expected_log_id="market-data-observation-log",
+    expected_old_checkpoint_id="checkpoint-before-training",
+    expected_new_checkpoint_id="checkpoint-before-promotion",
+)
+```
+
+The consistency verifier authenticates both checkpoint signatures, pins both governed checkpoint
+identities, permits an explicitly trusted log-key rotation, requires monotonically ordered claimed
+epochs, and verifies an RFC 6962-style proof that the old Merkle tree is an exact prefix of the new
+tree. The combined receipt binds that result to inclusion of the local observation in the new
+checkpoint. Canonical loaders reject duplicate keys, extensions, reformatting, invalid tree sizes,
+and extra, missing, or malformed proof nodes. Retained evidence contains commitments and counts,
+not raw returns, revision IDs, vendor IDs, log IDs, checkpoint IDs, or proof nodes.
+
+Consistency detects a rewritten prefix only when the verifier already possesses an authentic old
+checkpoint. It does not ensure checkpoint gossip, prove that isolated operators saw the same view,
+or establish trusted time. Production deployments should distribute checkpoints through an
+independent channel and add witness cosigning to surface split views across auditors.
 
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
