@@ -607,7 +607,11 @@ not raw returns, revision IDs, vendor IDs, log IDs, checkpoint IDs, or proof nod
 Consistency detects a rewritten prefix only when the verifier already possesses an authentic old
 checkpoint. It does not ensure checkpoint gossip, prove that isolated operators saw the same view,
 or establish trusted time. Production deployments should distribute checkpoints through an
-independent channel and add witness cosigning to surface split views across auditors.
+independent channel and require independently administered witnesses to cosign the exact verified
+old→new transition. `finforecast.snapshot_witness` binds a configurable 2–16 signer set and quorum
+to the consistency-verification digest, re-verifies the transition and promotion evidence locally,
+and emits a privacy-reduced cross-bound receipt. See
+[`docs/snapshot_witness_quorum.md`](docs/snapshot_witness_quorum.md).
 
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
