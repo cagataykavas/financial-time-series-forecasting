@@ -47,6 +47,14 @@ from .snapshot_consistency import (
     verify_snapshot_transparency_append_only_inclusion,
     verify_snapshot_transparency_consistency,
 )
+from .snapshot_gossip import (
+    SnapshotCheckpointGossipObservation,
+    create_snapshot_checkpoint_gossip_observation,
+    dump_snapshot_checkpoint_gossip_observation,
+    load_snapshot_checkpoint_gossip_observation,
+    verify_gossiped_snapshot_transparency_promotion,
+    verify_snapshot_checkpoint_gossip,
+)
 from .snapshot_observation import (
     SnapshotObservationReceipt,
     verify_and_record_return_revision_snapshot,
@@ -94,6 +102,7 @@ __all__ = [
     "SnapshotObservationReceipt",
     "SnapshotConsistencyWitnessApproval",
     "SnapshotConsistencyWitnessBundle",
+    "SnapshotCheckpointGossipObservation",
     "SnapshotTransparencyConsistencyProof",
     "SnapshotTransparencyCheckpoint",
     "SnapshotTransparencyProof",
@@ -112,11 +121,13 @@ __all__ = [
     "create_snapshot_transparency_consistency_proof",
     "create_snapshot_transparency_proof",
     "create_snapshot_consistency_witness_bundle",
+    "create_snapshot_checkpoint_gossip_observation",
     "dump_return_revision_snapshot_signature",
     "dump_snapshot_transparency_checkpoint",
     "dump_snapshot_transparency_consistency_proof",
     "dump_snapshot_transparency_proof",
     "dump_snapshot_consistency_witness_bundle",
+    "dump_snapshot_checkpoint_gossip_observation",
     "load_market_csv",
     "load_business_calendar",
     "load_point_in_time_market_csv",
@@ -126,6 +137,7 @@ __all__ = [
     "load_snapshot_transparency_consistency_proof",
     "load_snapshot_transparency_proof",
     "load_snapshot_consistency_witness_bundle",
+    "load_snapshot_checkpoint_gossip_observation",
     "require_regime_coverage",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
@@ -133,5 +145,7 @@ __all__ = [
     "verify_snapshot_transparency_consistency",
     "verify_snapshot_transparency_inclusion",
     "verify_snapshot_consistency_witness_bundle",
+    "verify_gossiped_snapshot_transparency_promotion",
+    "verify_snapshot_checkpoint_gossip",
     "verify_witnessed_snapshot_transparency_promotion",
 ]

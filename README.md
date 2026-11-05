@@ -613,6 +613,14 @@ to the consistency-verification digest, re-verifies the transition and promotion
 and emits a privacy-reduced cross-bound receipt. See
 [`docs/snapshot_witness_quorum.md`](docs/snapshot_witness_quorum.md).
 
+Witness quorum alone cannot reveal a log that gives separate, internally consistent histories to
+isolated promotion workflows. `finforecast.snapshot_gossip` lets independently transported relays
+sign short-lived observations of the exact authenticated checkpoint. The promotion boundary
+requires a fresh relay quorum and rejects any conflicting trusted view, even when another view has
+enough agreeing relays. Final gossip evidence retains checkpoint and relay-set commitments rather
+than relay identities, key IDs, or signatures. See
+[`docs/snapshot_checkpoint_gossip.md`](docs/snapshot_checkpoint_gossip.md).
+
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
 value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision
