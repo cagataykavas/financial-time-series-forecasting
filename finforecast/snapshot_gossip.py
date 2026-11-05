@@ -249,7 +249,7 @@ def create_snapshot_checkpoint_gossip_observation(
     return observation
 
 
-def verify_snapshot_checkpoint_gossip(
+def _validated_snapshot_checkpoint_gossip_views(
     views: Sequence[tuple[SnapshotTransparencyCheckpoint, SnapshotCheckpointGossipObservation]],
     *,
     trusted_log_public_keys: Mapping[str, bytes],
@@ -259,8 +259,11 @@ def verify_snapshot_checkpoint_gossip(
     verification_epoch: int,
     required_relays: int = 2,
     max_observation_age_seconds: int = MAX_GOSSIP_OBSERVATION_AGE_SECONDS,
-) -> dict[str, object]:
-    """Require fresh relay quorum and reject any trusted authenticated split view."""
+) -> tuple[
+    list[tuple[SnapshotCheckpointGossipObservation, dict[str, object]]],
+    int,
+]:
+    """Authenticate fresh, distinct gossip views and enforce the relay quorum."""
 
     if (
         isinstance(views, (str, bytes))
@@ -339,6 +342,32 @@ def verify_snapshot_checkpoint_gossip(
 
     if len(valid) < required_relays:
         raise SnapshotTransparencyError("gossip relay quorum is not satisfied")
+    return valid, verified_at
+
+
+def verify_snapshot_checkpoint_gossip(
+    views: Sequence[tuple[SnapshotTransparencyCheckpoint, SnapshotCheckpointGossipObservation]],
+    *,
+    trusted_log_public_keys: Mapping[str, bytes],
+    trusted_relay_public_keys: Mapping[str, bytes],
+    expected_log_id: str,
+    expected_checkpoint_id: str,
+    verification_epoch: int,
+    required_relays: int = 2,
+    max_observation_age_seconds: int = MAX_GOSSIP_OBSERVATION_AGE_SECONDS,
+) -> dict[str, object]:
+    """Require fresh relay quorum and reject any trusted authenticated split view."""
+
+    valid, verified_at = _validated_snapshot_checkpoint_gossip_views(
+        views,
+        trusted_log_public_keys=trusted_log_public_keys,
+        trusted_relay_public_keys=trusted_relay_public_keys,
+        expected_log_id=expected_log_id,
+        expected_checkpoint_id=expected_checkpoint_id,
+        verification_epoch=verification_epoch,
+        required_relays=required_relays,
+        max_observation_age_seconds=max_observation_age_seconds,
+    )
     checkpoint_views = {
         (
             str(authentication["checkpoint_sha256"]),
