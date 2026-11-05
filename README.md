@@ -621,6 +621,13 @@ enough agreeing relays. Final gossip evidence retains checkpoint and relay-set c
 than relay identities, key IDs, or signatures. See
 [`docs/snapshot_checkpoint_gossip.md`](docs/snapshot_checkpoint_gossip.md).
 
+An authenticated conflict can be retained with
+`record_snapshot_checkpoint_gossip_conflict`. The incident ledger is a strict, mode-`0600` SQLite
+database whose privacy-reduced entries form an append-only SHA-256 chain. Exact replay is
+idempotent; a new conflict links to the previous entry and records only governed identity, view,
+observation, relay-revision, and policy commitments plus counts and detection time. See
+[`docs/snapshot_checkpoint_incidents.md`](docs/snapshot_checkpoint_incidents.md).
+
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
 value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision

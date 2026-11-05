@@ -55,6 +55,10 @@ from .snapshot_gossip import (
     verify_gossiped_snapshot_transparency_promotion,
     verify_snapshot_checkpoint_gossip,
 )
+from .snapshot_incidents import (
+    SnapshotGossipIncidentReceipt,
+    record_snapshot_checkpoint_gossip_conflict,
+)
 from .snapshot_observation import (
     SnapshotObservationReceipt,
     verify_and_record_return_revision_snapshot,
@@ -103,6 +107,7 @@ __all__ = [
     "SnapshotConsistencyWitnessApproval",
     "SnapshotConsistencyWitnessBundle",
     "SnapshotCheckpointGossipObservation",
+    "SnapshotGossipIncidentReceipt",
     "SnapshotTransparencyConsistencyProof",
     "SnapshotTransparencyCheckpoint",
     "SnapshotTransparencyProof",
@@ -139,6 +144,7 @@ __all__ = [
     "load_snapshot_consistency_witness_bundle",
     "load_snapshot_checkpoint_gossip_observation",
     "require_regime_coverage",
+    "record_snapshot_checkpoint_gossip_conflict",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
     "verify_snapshot_transparency_append_only_inclusion",
