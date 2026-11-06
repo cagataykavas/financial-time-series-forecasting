@@ -17,7 +17,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
 | Model comparison | Circular moving-block bootstrap of paired loss differences | IID resampling that erases short-range dependence |
 | Decision economics | Asymmetric under/over-forecast cost and action cost | Statistically better but operationally worse model |
-| Uncertainty | Split conformal absolute-residual intervals | Uncalibrated confidence claims |
+| Uncertainty | Horizon-purged split conformal absolute-residual intervals | Unmatured labels or uncalibrated confidence claims |
 | Governance | MAE improvement, fold-win and cost gates | Automatic promotion from one aggregate score |
 | Reproducibility | Canonical SHA-256 model manifest | Untraceable candidate artifact |
 | Delivery | Wheel, CLI, FastAPI and non-root container | Source-tree-only demo |
@@ -30,8 +30,9 @@ flowchart TD
     S --> T["Fold-local training"]
     T --> P["Out-of-sample predictions"]
     P --> M["Accuracy and business cost"]
-    P --> C["Earlier calibration segment"]
-    C --> U["Later interval evaluation"]
+    P --> C["Mature calibration labels"]
+    C --> E["Horizon-sized embargo"]
+    E --> U["Later interval evaluation"]
     M --> G["Promotion gates"]
     U --> G
     G --> A["Hashed candidate manifest"]
@@ -410,7 +411,13 @@ The compatibility report compares gradient boosting with the zero-return baselin
 
 ## Probabilistic forecast boundary
 
-The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample prediction segment**. Coverage and interval width are then measured on the later segment. The implementation uses the finite-sample conformal rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
+The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample
+prediction segment**. A horizon-sized embargo removes the adjacent prediction rows whose target
+labels would not yet be mature when the first evaluation forecast is issued. The immutable boundary
+records exact exclusive offsets, minimum segment sizes, label horizon, and a canonical SHA-256
+policy digest; the candidate manifest binds the complete uncertainty evidence. Coverage and interval
+width are measured only on the later segment. The implementation uses the finite-sample conformal
+rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
 
 This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
 

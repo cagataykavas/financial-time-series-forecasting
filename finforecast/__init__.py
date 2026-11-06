@@ -15,7 +15,7 @@ from .data import (
 )
 from .engine import ForecastExperiment
 from .features import ForecastTargetSpec
-from .intervals import SplitConformalCalibrator
+from .intervals import PurgedCalibrationBoundary, SplitConformalCalibrator
 from .regime_coverage import (
     RegimeCoveragePolicy,
     RegimeIntervalObservation,
@@ -104,6 +104,7 @@ __all__ = [
     "MarketData",
     "MarketDataSnapshot",
     "PointInTimeReturn",
+    "PurgedCalibrationBoundary",
     "RegimeCoveragePolicy",
     "RegimeIntervalObservation",
     "ReturnRevisionSnapshotSignature",

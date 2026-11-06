@@ -9,7 +9,7 @@ import pandas as pd
 from .backtest import BacktestRunner
 from .data import MarketData
 from .features import ForecastTargetSpec, make_supervised_features
-from .intervals import SplitConformalCalibrator
+from .intervals import PurgedCalibrationBoundary, SplitConformalCalibrator
 from .metrics import BusinessCost, interval_metrics, pinball_loss
 from .models import default_model_factories
 from .registry import PromotionPolicy, write_model_manifest
@@ -55,9 +55,13 @@ def _build_evidence(
     aggregate = runner.aggregate(backtest, cost)
 
     predictions = backtest.predictions
-    calibration_end = max(2, int(len(predictions) * 0.4))
-    calibration = predictions.iloc[:calibration_end]
-    evaluation = predictions.iloc[calibration_end:]
+    calibration_boundary = PurgedCalibrationBoundary.build(
+        len(predictions),
+        calibration_fraction=0.4,
+        label_horizon=target_spec.horizon,
+    )
+    calibration = predictions.iloc[calibration_boundary.calibration_slice]
+    evaluation = predictions.iloc[calibration_boundary.evaluation_slice]
     calibrator = SplitConformalCalibrator(coverage=0.9).fit(
         calibration["actual"], calibration["gradient_boosting"]
     )
@@ -68,6 +72,8 @@ def _build_evidence(
         "lower_pinball_loss": pinball_loss(evaluation["actual"], lower, 0.05),
         "upper_pinball_loss": pinball_loss(evaluation["actual"], upper, 0.95),
         "evaluation_size": len(evaluation),
+        "calibration_boundary": calibration_boundary.as_dict(),
+        "calibration_boundary_sha256": calibration_boundary.sha256,
     }
     policy = PromotionPolicy(
         min_relative_mae_improvement=0.01,
@@ -151,7 +157,7 @@ def _build_evidence(
                 "effective at the cutoff."
             )
     return {
-        "schema_version": 16,
+        "schema_version": 17,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
@@ -171,8 +177,8 @@ def _build_evidence(
             "All reported forecasts are out of sample within the evaluation.",
             "Training label horizons are purged before every test window.",
             (
-                "The conformal interval is calibrated on an earlier prediction segment "
-                "and evaluated later."
+                "The conformal interval is calibrated only on labels that mature before the "
+                "horizon-sized embargo and later evaluation segment."
             ),
             scope_claim,
             *snapshot_claims,
@@ -222,6 +228,7 @@ def write_evidence(
             "dataset": payload["dataset"],
             "validation": payload["validation"],
             "metrics": payload["aggregate_metrics"]["gradient_boosting"],
+            "uncertainty": payload["uncertainty"],
             "decision": payload["promotion_decision"],
         },
     )

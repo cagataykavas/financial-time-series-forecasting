@@ -13,13 +13,18 @@ def test_evidence_is_deterministic_and_explicit_about_claim_scope():
     first = build_evidence(rows=520, seed=9)
     second = build_evidence(rows=520, seed=9)
     assert first == second
-    assert first["schema_version"] == 16
+    assert first["schema_version"] == 17
     assert first["validation"]["fold_count"] > 1
     assert first["validation"]["gap"] >= first["validation"]["label_horizon"] == 1
     assert first["validation"]["target_spec"]["horizon"] == 1
     assert len(first["validation"]["target_spec_sha256"]) == 64
     assert len(first["validation"]["target_values_sha256"]) == 64
     assert first["uncertainty"]["evaluation_size"] > 0
+    boundary = first["uncertainty"]["calibration_boundary"]
+    assert boundary["embargo_size"] == boundary["label_horizon"] == 1
+    assert boundary["latest_calibration_label_end"] < boundary["evaluation_start"]
+    assert len(first["uncertainty"]["calibration_boundary_sha256"]) == 64
+    assert any("horizon-sized embargo" in claim for claim in first["claims"])
     assert any("label horizons are purged" in claim for claim in first["claims"])
     assert any("not evidence of market profitability" in claim for claim in first["claims"])
 
@@ -30,6 +35,7 @@ def test_evidence_writes_hashed_candidate_manifest(tmp_path):
     manifest = json.loads((tmp_path / "candidate_manifest.json").read_text())
     assert evidence == payload
     assert len(manifest["sha256"]) == 64
+    assert manifest["payload"]["uncertainty"] == payload["uncertainty"]
 
 
 def test_market_evidence_carries_source_identity_and_honest_claim(tmp_path):
