@@ -628,6 +628,11 @@ idempotent; a new conflict links to the previous entry and records only governed
 observation, relay-revision, and policy commitments plus counts and detection time. See
 [`docs/snapshot_checkpoint_incidents.md`](docs/snapshot_checkpoint_incidents.md).
 
+Periodic `create_snapshot_incident_ledger_checkpoint` calls bind the validated incident count and
+chain head to an externally controlled Ed25519 key. Independently retaining those canonical
+checkpoint artifacts lets a later verifier reject whole-database rollback, truncation, or a
+validly re-hashed replacement prefix before trusting the current ledger.
+
 The signature binds the source identity, schema digest, record count, and a canonical commitment
 over every ordered observation time, availability time, revision identifier, and exact float
 value. Verification pins the expected vendor, dataset, snapshot, and Ed25519 public-key revision

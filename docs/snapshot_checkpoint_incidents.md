@@ -43,11 +43,58 @@ appended with a monotonic sequence and a digest link to the preceding entry. Eve
 the complete chain under `BEGIN IMMEDIATE`, uses full synchronous commits, and rejects corrupt or
 extended schemas, unsafe permissions, symlinks, oversized files, and more than 10,000 incidents.
 
+## Sign and retain ledger checkpoints
+
+`create_snapshot_incident_ledger_checkpoint` validates the complete SQLite chain under a read
+transaction and signs its exact entry count and head digest with an externally controlled Ed25519
+key. Publish the canonical checkpoint bytes to storage administered independently from the ledger:
+
+```python
+from finforecast import (
+    create_snapshot_incident_ledger_checkpoint,
+    dump_snapshot_incident_ledger_checkpoint,
+)
+
+checkpoint = create_snapshot_incident_ledger_checkpoint(
+    "/var/lib/finforecast/checkpoint-incidents.sqlite3",
+    ledger_id="production-snapshot-gossip-incidents",
+    checkpoint_id="incident-ledger-2026-11-06-001",
+    issued_at_epoch=protected_runner_epoch,
+    signer=protected_checkpoint_signer,
+)
+immutable_store.put(
+    checkpoint.checkpoint_id,
+    dump_snapshot_incident_ledger_checkpoint(checkpoint),
+    if_none_match="*",
+)
+```
+
+Before relying on a later ledger, authenticate the independently retrieved checkpoint against a
+pinned public-key revision and require the current database to extend its exact prefix:
+
+```python
+from finforecast import verify_snapshot_incident_ledger_checkpoint
+
+verification = verify_snapshot_incident_ledger_checkpoint(
+    independently_retrieved_checkpoint,
+    trusted_public_keys=trusted_checkpoint_public_keys,
+    expected_ledger_id="production-snapshot-gossip-incidents",
+    expected_checkpoint_id="incident-ledger-2026-11-06-001",
+    incident_ledger_path="/var/lib/finforecast/checkpoint-incidents.sqlite3",
+)
+```
+
+This detects whole-database rollback or replacement only relative to a signed checkpoint retained
+outside the host. The module does not upload artifacts, make the storage immutable, authenticate
+the caller-supplied issue time, rotate or revoke signing keys, or provide a signer quorum. Those
+remain protected-workflow and retention-service responsibilities.
+
 ## Operating boundary
 
 Create the ledger in an existing protected directory and retain it in immutable, independently
 controlled storage. The application-level chain exposes accidental corruption and missing or
-reordered entries, but a host administrator who can replace the entire database can rewrite the
-chain. The ledger is not signed, transparency-logged, or independently timestamped; detection time
-still comes from the protected runner. A conflict is evidence of authenticated inconsistent views,
-not proof of which log operator or relay acted maliciously.
+reordered entries. Signed checkpoints expose whole-file replacement only when they are retained
+outside the host and verified later. Neither the ledger nor its checkpoints are independently
+timestamped; detection and checkpoint issue times still come from the protected runner. A conflict
+is evidence of authenticated inconsistent views, not proof of which log operator or relay acted
+maliciously.

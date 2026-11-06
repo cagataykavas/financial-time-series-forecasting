@@ -156,7 +156,7 @@ def _entry_sha256(
     )
 
 
-def _prepare_ledger_path(path: str | os.PathLike[str]) -> Path:
+def _incident_ledger_path(path: str | os.PathLike[str]) -> Path:
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError("incident_ledger_path must be a filesystem path")
     ledger_path = Path(path)
@@ -167,6 +167,26 @@ def _prepare_ledger_path(path: str | os.PathLike[str]) -> Path:
         raise SnapshotGossipIncidentError(
             "incident ledger parent must be an existing non-symlink directory"
         )
+    return ledger_path
+
+
+def _inspect_existing_ledger_path(path: str | os.PathLike[str]) -> Path:
+    ledger_path = _incident_ledger_path(path)
+    try:
+        ledger_stat = ledger_path.lstat()
+    except OSError as exc:
+        raise SnapshotGossipIncidentError("incident ledger cannot be inspected") from exc
+    if not stat.S_ISREG(ledger_stat.st_mode):
+        raise SnapshotGossipIncidentError("incident ledger must be a regular non-symlink file")
+    if stat.S_IMODE(ledger_stat.st_mode) & 0o077:
+        raise SnapshotGossipIncidentError("incident ledger permissions are too broad")
+    if ledger_stat.st_size > _MAX_LEDGER_BYTES:
+        raise SnapshotGossipIncidentError("incident ledger exceeds the byte limit")
+    return ledger_path
+
+
+def _prepare_ledger_path(path: str | os.PathLike[str]) -> Path:
+    ledger_path = _incident_ledger_path(path)
     try:
         descriptor = os.open(
             ledger_path,
@@ -179,17 +199,7 @@ def _prepare_ledger_path(path: str | os.PathLike[str]) -> Path:
         raise SnapshotGossipIncidentError("incident ledger cannot be created safely") from exc
     else:
         os.close(descriptor)
-    try:
-        ledger_stat = ledger_path.lstat()
-    except OSError as exc:
-        raise SnapshotGossipIncidentError("incident ledger cannot be inspected") from exc
-    if not stat.S_ISREG(ledger_stat.st_mode):
-        raise SnapshotGossipIncidentError("incident ledger must be a regular non-symlink file")
-    if stat.S_IMODE(ledger_stat.st_mode) & 0o077:
-        raise SnapshotGossipIncidentError("incident ledger permissions are too broad")
-    if ledger_stat.st_size > _MAX_LEDGER_BYTES:
-        raise SnapshotGossipIncidentError("incident ledger exceeds the byte limit")
-    return ledger_path
+    return _inspect_existing_ledger_path(ledger_path)
 
 
 def _initialize_or_validate_schema(connection: sqlite3.Connection) -> None:
