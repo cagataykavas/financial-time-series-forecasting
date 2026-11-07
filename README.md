@@ -481,6 +481,43 @@ coverage observations within each fixed regime; overlapping horizons and market 
 make it optimistic. This gate therefore complements, rather than replaces, temporal monitoring,
 breach-dependence checks, delayed-label recalibration, and economic-loss validation.
 
+#### Regime coverage drift
+
+`audit_regime_coverage_drift` compares an earlier reference window with a strictly later current
+window using the same matured intervals and point-in-time regime labels. The policy predeclares a
+maximum tolerated drop, confidence level, minimum observations in each window, and the complete
+regime family. It fails closed when either side lacks evidence, when windows overlap, or when any
+reference outcome matures after current monitoring begins.
+
+For every regime, the audit subtracts a simultaneous Wilson upper bound for current coverage from
+a simultaneous Wilson lower bound for reference coverage. Bonferroni allocation covers both
+bounds across the full regime family; an alert is raised only when the resulting lower confidence
+bound on deterioration exceeds `max_coverage_drop`. This avoids treating a noisy point-estimate
+change as established drift.
+
+```python
+from finforecast import RegimeCoverageDriftPolicy, audit_regime_coverage_drift
+
+drift_policy = RegimeCoverageDriftPolicy(
+    regimes=("high-volatility", "low-volatility", "normal-volatility"),
+    max_coverage_drop=0.05,
+    confidence_level=0.95,
+    min_observations_per_window=100,
+)
+drift_report = audit_regime_coverage_drift(
+    reference_matured_intervals,
+    current_matured_intervals,
+    drift_policy,
+)
+```
+
+The report is self-digested and privacy-reduced: it includes counts, coverage rates, simultaneous
+drop bounds, and stable finding codes, but omits raw forecasts, outcomes, and timestamps. Run the
+absolute regime-coverage gate on the current window as well—a stable but inadequate model should
+not pass merely because it has not deteriorated. The statistical guarantee still relies on fixed
+windows and independent Bernoulli coverage observations; overlapping forecast horizons and serial
+dependence can make it optimistic.
+
 #### Point-in-time volatility labels
 
 `assign_point_in_time_volatility_regimes` makes that regime-definition requirement executable.

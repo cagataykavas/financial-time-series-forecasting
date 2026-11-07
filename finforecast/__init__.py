@@ -17,10 +17,13 @@ from .engine import ForecastExperiment
 from .features import ForecastTargetSpec
 from .intervals import PurgedCalibrationBoundary, SplitConformalCalibrator
 from .regime_coverage import (
+    RegimeCoverageDriftPolicy,
     RegimeCoveragePolicy,
     RegimeIntervalObservation,
     audit_regime_coverage,
+    audit_regime_coverage_drift,
     require_regime_coverage,
+    require_regime_coverage_drift,
 )
 from .regime_labeling import (
     PointInTimeReturn,
@@ -111,6 +114,7 @@ __all__ = [
     "MarketDataSnapshot",
     "PointInTimeReturn",
     "PurgedCalibrationBoundary",
+    "RegimeCoverageDriftPolicy",
     "RegimeCoveragePolicy",
     "RegimeIntervalObservation",
     "ReturnRevisionSnapshotSignature",
@@ -133,6 +137,7 @@ __all__ = [
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "audit_regime_coverage",
+    "audit_regime_coverage_drift",
     "DelayedForecast",
     "assign_authenticated_point_in_time_volatility_regimes",
     "assign_point_in_time_volatility_regimes",
@@ -163,6 +168,7 @@ __all__ = [
     "load_snapshot_checkpoint_gossip_observation",
     "load_snapshot_incident_ledger_checkpoint",
     "require_regime_coverage",
+    "require_regime_coverage_drift",
     "rolling_delayed_conformal",
     "RollingConformalPolicy",
     "RollingConformalResult",
