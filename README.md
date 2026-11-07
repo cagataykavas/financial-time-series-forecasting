@@ -68,6 +68,7 @@ finforecast/
 ├── evidence.py     # reproducible end-to-end verification artifact
 ├── features.py     # shifted/rolling point-in-time features
 ├── intervals.py    # finite-sample split conformal calibration
+├── rolling_conformal.py # delayed-label rolling conformal recalibration
 ├── metrics.py      # point, probabilistic and business metrics
 ├── models.py       # model factories; no fitted global instances
 ├── registry.py     # multi-gate promotion and hashed manifest
@@ -420,6 +421,33 @@ width are measured only on the later segment. The implementation uses the finite
 rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
 
 This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
+
+### Rolling delayed-label recalibration
+
+`rolling_delayed_conformal` turns the one-shot embargo into a predeclared production refresh
+schedule. Each scheduled refresh selects only the most recent calibration observations whose
+labels became available **strictly before** the current forecast was issued. The radius stays fixed
+between refreshes, so labels cannot influence live intervals merely because they arrived between
+governed refresh points.
+
+```python
+from finforecast import DelayedForecast, RollingConformalPolicy, rolling_delayed_conformal
+
+policy = RollingConformalPolicy(
+    target_coverage=0.90,
+    calibration_window=250,
+    minimum_calibration_size=50,
+    refresh_interval=25,
+)
+result = rolling_delayed_conformal(calibration_history, live_evaluation, policy)
+```
+
+The result contains interval bounds for downstream decisions and a deterministic, self-digested
+report with the policy commitment, refresh schedule, selected-window commitments, observed
+coverage, and mean width. It does not retain raw labels or point forecasts in the report. This is
+an offline validation/reference boundary: callers must source authenticated event times, persist
+policy before evaluation, and separately apply the regime-coverage gate. Delayed vendor
+corrections, serial dependence, and regime drift can still invalidate conformal assumptions.
 
 ### Market-regime coverage gate
 

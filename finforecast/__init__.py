@@ -38,6 +38,12 @@ from .regime_source import (
     load_return_revision_snapshot_signature,
     verify_return_revision_snapshot_signature,
 )
+from .rolling_conformal import (
+    DelayedForecast,
+    RollingConformalPolicy,
+    RollingConformalResult,
+    rolling_delayed_conformal,
+)
 from .settlements import SettlementSnapshot, load_point_in_time_settlement
 from .snapshot_consistency import (
     SnapshotTransparencyConsistencyProof,
@@ -127,6 +133,7 @@ __all__ = [
     "apply_point_in_time_corporate_actions",
     "apply_point_in_time_splits",
     "audit_regime_coverage",
+    "DelayedForecast",
     "assign_authenticated_point_in_time_volatility_regimes",
     "assign_point_in_time_volatility_regimes",
     "commit_point_in_time_returns",
@@ -156,6 +163,9 @@ __all__ = [
     "load_snapshot_checkpoint_gossip_observation",
     "load_snapshot_incident_ledger_checkpoint",
     "require_regime_coverage",
+    "rolling_delayed_conformal",
+    "RollingConformalPolicy",
+    "RollingConformalResult",
     "record_snapshot_checkpoint_gossip_conflict",
     "verify_return_revision_snapshot_signature",
     "verify_and_record_return_revision_snapshot",
