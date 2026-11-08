@@ -561,6 +561,49 @@ approximately stationary blocks. It does not correct cohort selection, long-memo
 structural breaks, or shared dependence across regimes; sensitivity analysis over preregistered
 block sizes and an absolute current-coverage gate remain necessary.
 
+#### Reviewed block-size sensitivity envelope
+
+`audit_regime_coverage_block_sensitivity` makes those two remaining promotion controls executable.
+It runs the absolute current-window coverage gate and repeats the dependence-aware drift audit over
+an ordered, unique set of block sizes declared before evaluation. Promotion succeeds only if the
+absolute gate and every block-size audit accept:
+
+```python
+from finforecast import (
+    RegimeCoverageBlockSensitivityPolicy,
+    audit_regime_coverage_block_sensitivity,
+)
+
+sensitivity_policy = RegimeCoverageBlockSensitivityPolicy(
+    regimes=("high-volatility", "low-volatility", "normal-volatility"),
+    block_sizes=(5, 10, 20),
+    target_coverage=0.90,
+    tolerated_shortfall=0.05,
+    max_coverage_drop=0.05,
+    confidence_level=0.95,
+    min_observations_per_window=100,
+    resamples_per_block_size=20_000,
+    random_seed=42,
+)
+sensitivity_report = audit_regime_coverage_block_sensitivity(
+    reference_matured_intervals,
+    current_matured_intervals,
+    sensitivity_policy,
+)
+```
+
+The report retains each child audit and summarizes the most conservative drop lower bound by
+regime. A mixed accept/reject result emits `block_size_decision_instability`; any rejected child
+still fails the envelope. The common seed is intentional, reducing avoidable Monte Carlo variation
+between reviewed sizes, while every child remains bound to its exact policy and input populations.
+A single aggregate work budget prevents a superficially valid grid from multiplying resampling cost
+without bound.
+
+This is a robustness analysis, not a procedure for selecting the best-looking block size after the
+fact. Its guarantees still depend on the reviewed grid covering plausible dependence horizons and
+on approximate within-window stationarity. A stationary-bootstrap comparison is the next useful
+estimator-level sensitivity check.
+
 #### Point-in-time volatility labels
 
 `assign_point_in_time_volatility_regimes` makes that regime-definition requirement executable.
