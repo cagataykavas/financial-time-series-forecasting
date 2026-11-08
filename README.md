@@ -518,6 +518,49 @@ not pass merely because it has not deteriorated. The statistical guarantee still
 windows and independent Bernoulli coverage observations; overlapping forecast horizons and serial
 dependence can make it optimistic.
 
+#### Dependence-aware block drift
+
+`audit_blocked_regime_coverage_drift` addresses short-range clustering in coverage breaches with a
+bounded circular moving-block bootstrap. The reviewed policy fixes the regime family, block size,
+resample count, seed, evidence minimum, confidence level, and tolerated drop before evaluation:
+
+```python
+from finforecast import (
+    RegimeCoverageBlockBootstrapPolicy,
+    audit_blocked_regime_coverage_drift,
+)
+
+block_policy = RegimeCoverageBlockBootstrapPolicy(
+    regimes=("high-volatility", "low-volatility", "normal-volatility"),
+    max_coverage_drop=0.05,
+    confidence_level=0.95,
+    min_observations_per_window=100,
+    block_size=10,
+    resamples=20_000,
+    random_seed=42,
+)
+block_report = audit_blocked_regime_coverage_drift(
+    reference_matured_intervals,
+    current_matured_intervals,
+    block_policy,
+)
+```
+
+The bootstrap samples consecutive circular blocks independently within each reference/current
+regime sequence, preserving local runs of hits and misses instead of treating every interval as an
+IID Bernoulli draw. A one-sided percentile lower bound is computed for each coverage drop, with
+Bonferroni alpha allocation across the complete regime family. Missing evidence, fewer than two
+blocks, overlapping windows, immature reference outcomes, or an excessive resampling work budget
+fail closed before promotion.
+
+Reports bind the exact private observation populations with SHA-256 commitments and include only
+aggregate coverage, bounds, policy/method metadata, hashed resampling seeds, and stable findings.
+They do not retain forecasts, outcomes, or timestamps. The percentile block bootstrap is an
+asymptotic diagnostic: its coverage depends on a prespecified, appropriate block size and enough
+approximately stationary blocks. It does not correct cohort selection, long-memory dependence,
+structural breaks, or shared dependence across regimes; sensitivity analysis over preregistered
+block sizes and an absolute current-coverage gate remain necessary.
+
 #### Point-in-time volatility labels
 
 `assign_point_in_time_volatility_regimes` makes that regime-definition requirement executable.

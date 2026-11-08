@@ -25,6 +25,11 @@ from .regime_coverage import (
     require_regime_coverage,
     require_regime_coverage_drift,
 )
+from .regime_coverage_blocks import (
+    RegimeCoverageBlockBootstrapPolicy,
+    audit_blocked_regime_coverage_drift,
+    require_blocked_regime_coverage_drift,
+)
 from .regime_labeling import (
     PointInTimeReturn,
     ReturnRevisionStreamCommitment,
@@ -115,6 +120,7 @@ __all__ = [
     "PointInTimeReturn",
     "PurgedCalibrationBoundary",
     "RegimeCoverageDriftPolicy",
+    "RegimeCoverageBlockBootstrapPolicy",
     "RegimeCoveragePolicy",
     "RegimeIntervalObservation",
     "ReturnRevisionSnapshotSignature",
@@ -138,6 +144,7 @@ __all__ = [
     "apply_point_in_time_splits",
     "audit_regime_coverage",
     "audit_regime_coverage_drift",
+    "audit_blocked_regime_coverage_drift",
     "DelayedForecast",
     "assign_authenticated_point_in_time_volatility_regimes",
     "assign_point_in_time_volatility_regimes",
@@ -169,6 +176,7 @@ __all__ = [
     "load_snapshot_incident_ledger_checkpoint",
     "require_regime_coverage",
     "require_regime_coverage_drift",
+    "require_blocked_regime_coverage_drift",
     "rolling_delayed_conformal",
     "RollingConformalPolicy",
     "RollingConformalResult",
