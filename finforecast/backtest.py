@@ -44,6 +44,9 @@ class BacktestRunner:
 
     def run(self, data: pd.DataFrame) -> BacktestResult:
         assert_no_target_leakage(data, self.target_column)
+        target_horizon = data.attrs.get("target_horizon")
+        if target_horizon is not None and target_horizon != self.splitter.config.label_horizon:
+            raise ValueError("feature target_horizon does not match the walk-forward label_horizon")
         if not data.index.is_monotonic_increasing or not data.index.is_unique:
             raise ValueError("observations must have a unique, increasing time index")
         feature_columns = [column for column in data.columns if column != self.target_column]

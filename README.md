@@ -10,7 +10,7 @@ This is no longer a notebook-shaped “train an LSTM and plot the test set” pr
 |---|---|---|
 | Data ingestion | Ordered CSV validation and normalized SHA-256 identity | Silent sorting, duplicate timestamps and untraceable inputs |
 | Validation | Expanding or capped rolling walk-forward folds | Random split leakage |
-| Label overlap | Configurable purge gap | Train/test boundary contamination |
+| Label overlap | Horizon-bound train/test and calibration/evaluation purges | Boundary contamination from forward labels |
 | Baselines | Zero return, historical mean, seasonal naive | Beating no meaningful comparator |
 | Candidates | Standardized ridge and histogram gradient boosting | Preprocessing fit outside each fold |
 | Point accuracy | MAE, RMSE, sMAPE, MASE, direction | Single-metric storytelling |
@@ -36,13 +36,14 @@ flowchart TD
     G --> A["Hashed candidate manifest"]
 ```
 
-The split contract uses exclusive end offsets and checks this invariant for every fold:
+The target horizon is a first-class contract shared by feature construction, the splitter, evidence generation and the CLI. The split contract uses exclusive end offsets and checks these invariants for every fold:
 
 ```text
 train_end + purge_gap == test_start
+purge_gap >= label_horizon
 ```
 
-Models are constructed and fitted inside the fold loop. The test index must be unique and increasing; overlapping test windows are rejected instead of silently double-counting forecasts.
+The default one-step target now implies a one-row purge everywhere, including the compatibility API. Multi-period targets use the cumulative forward return and automatically increase the purge gap. Models are constructed and fitted inside the fold loop. The test index must be unique and increasing; overlapping test windows are rejected instead of silently double-counting forecasts.
 
 ## Package map
 
@@ -86,9 +87,10 @@ The default schema is `timestamp,close,volume`. Timestamps must already be uniqu
 ```bash
 finforecast --csv prices.csv --output artifacts/market
 finforecast --csv prices.csv --evidence --output artifacts/market-evidence
+finforecast --csv prices.csv --horizon 5 --evidence --output artifacts/five-period
 ```
 
-Column names are configurable with `--timestamp-column`, `--close-column` and `--volume-column`. Use `--no-volume` for a close-only file. The CLI requires at least 320 raw observations so the 60-period features, minimum training window and out-of-sample evaluation all remain non-empty.
+Column names are configurable with `--timestamp-column`, `--close-column` and `--volume-column`. Use `--no-volume` for a close-only file. A one-step run requires at least 320 raw observations; the bound increases with the horizon so the 60-period features, training purge, calibration purge and out-of-sample evaluation all remain non-empty. Horizon-aware evidence uses schema version 2.
 
 ## Promotion policy
 
@@ -104,7 +106,7 @@ The compatibility report compares gradient boosting with the zero-return baselin
 
 ## Probabilistic forecast boundary
 
-The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample prediction segment**. Coverage and interval width are then measured on the later segment. The implementation uses the finite-sample conformal rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
+The conformal calibrator learns an absolute-residual radius from an **earlier out-of-sample prediction segment**. Coverage and interval width are then measured on the later segment. For a horizon of `h`, the evidence path purges `h - 1` prediction rows between those segments so their forward-return windows do not overlap. The implementation uses the finite-sample conformal rank `ceil((n + 1) * coverage)` rather than a casual percentile call.
 
 This establishes an explicit uncertainty contract for either data source. Exchangeability can fail under financial regime change, so production use would additionally require rolling recalibration and conditional coverage monitoring.
 
@@ -135,6 +137,6 @@ The regression suite covers temporal isolation, rolling windows, invalid and ove
 
 ## Claims and non-claims
 
-This repository demonstrates evaluation and release engineering. It does **not** claim alpha, profitability or readiness for live capital. The CSV boundary validates structure, not economic correctness: production data still needs point-in-time vendor guarantees, corporate-action and delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning, horizon-specific label purging and live coverage monitoring.
+This repository demonstrates evaluation and release engineering. It does **not** claim alpha, profitability or readiness for live capital. The CSV boundary validates structure, not economic correctness: production data still needs point-in-time vendor guarantees, corporate-action and delisting treatment, market calendars, execution delay, slippage/impact, nested historical tuning and live coverage monitoring.
 
-Those are explicit boundaries because a credible financial ML project should make invalid conclusions difficult—not merely make charts attractive.
+Those are explicit boundaries because a credible financial ML project should make invalid conclusions difficult—not merely make charts attractive. Horizon-specific label purging is implemented; point-in-time vendor guarantees, corporate-action and delisting treatment, and market-calendar semantics remain external data responsibilities.

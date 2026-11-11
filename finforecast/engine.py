@@ -12,15 +12,32 @@ from .splits import WalkForwardConfig, WalkForwardSplitter
 
 
 class ForecastExperiment:
-    def __init__(self, min_train: int = 250, test_size: int = 20, seed: int = 42) -> None:
-        WalkForwardConfig(min_train_size=min_train, test_size=test_size)
+    def __init__(
+        self,
+        min_train: int = 250,
+        test_size: int = 20,
+        seed: int = 42,
+        horizon: int = 1,
+    ) -> None:
+        WalkForwardConfig(
+            min_train_size=min_train,
+            test_size=test_size,
+            gap=horizon,
+            label_horizon=horizon,
+        )
         self.min_train = min_train
         self.test_size = test_size
         self.seed = seed
+        self.horizon = horizon
 
     def walk_forward(self, data: pd.DataFrame) -> pd.DataFrame:
         splitter = WalkForwardSplitter(
-            WalkForwardConfig(min_train_size=self.min_train, test_size=self.test_size)
+            WalkForwardConfig(
+                min_train_size=self.min_train,
+                test_size=self.test_size,
+                gap=self.horizon,
+                label_horizon=self.horizon,
+            )
         )
         factories = default_model_factories(self.seed)
         selected = {

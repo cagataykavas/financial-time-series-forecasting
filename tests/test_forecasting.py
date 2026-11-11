@@ -30,6 +30,16 @@ def test_walk_forward_produces_out_of_sample_predictions():
     assert {"actual", "naive_zero", "ridge", "gradient_boosting"}.issubset(predictions.columns)
 
 
+def test_walk_forward_uses_horizon_as_purge_gap():
+    close, volume = synthetic_market(rows=650, seed=42)
+    data = make_supervised_features(close, volume, horizon=3)
+    experiment = ForecastExperiment(min_train=200, test_size=25, seed=42, horizon=3)
+
+    predictions = experiment.walk_forward(data)
+
+    assert len(predictions) > 100
+
+
 def test_evaluation_includes_baselines_costs_and_bootstrap():
     close, volume = synthetic_market(rows=620, seed=7)
     data = make_supervised_features(close, volume)
