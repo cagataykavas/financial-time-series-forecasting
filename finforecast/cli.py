@@ -27,6 +27,19 @@ def _non_negative_float(value: str) -> float:
     return parsed
 
 
+def _horizon(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 20:
+        raise argparse.ArgumentTypeError("horizon must be between 1 and 20")
+    return parsed
+
+
+def _minimum_rows_for_horizon(horizon: int) -> int:
+    # Preserve the one-step 320-row floor and add enough history for both the
+    # wider training purge and the calibration/evaluation purge.
+    return 320 + 4 * (horizon - 1)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Leakage-aware financial forecasting project")
     source = parser.add_mutually_exclusive_group()
@@ -38,12 +51,16 @@ def main(argv: list[str] | None = None) -> int:
     volume.add_argument("--volume-column", default="volume")
     volume.add_argument("--no-volume", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--horizon", type=_horizon, default=1)
     parser.add_argument("--cost-bps", type=_non_negative_float, default=5.0)
     parser.add_argument("--output", type=Path, default=Path("artifacts"))
     parser.add_argument(
         "--evidence", action="store_true", help="build governed evaluation evidence"
     )
     args = parser.parse_args(argv)
+    minimum_rows = _minimum_rows_for_horizon(args.horizon)
+    if args.rows < minimum_rows:
+        parser.error(f"rows must be at least {minimum_rows} for horizon {args.horizon}")
 
     market: MarketData | None = None
     if args.csv is not None:
@@ -56,14 +73,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (TypeError, ValueError) as exc:
             parser.error(str(exc))
-        if len(market.close) < 320:
-            parser.error("market CSV must contain at least 320 observations")
+        if len(market.close) < minimum_rows:
+            parser.error(
+                f"market CSV must contain at least {minimum_rows} observations "
+                f"for horizon {args.horizon}"
+            )
 
     if args.evidence:
         result = write_evidence(
             args.output,
             rows=args.rows,
             seed=args.seed,
+            horizon=args.horizon,
             market_data=market,
         )
         print(
@@ -87,11 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         close, volume_values = market.close, market.volume
         dataset_metadata = market.metadata()
-    data = make_supervised_features(close, volume_values)
-    experiment = ForecastExperiment(seed=args.seed)
+    data = make_supervised_features(close, volume_values, horizon=args.horizon)
+    experiment = ForecastExperiment(seed=args.seed, horizon=args.horizon)
     predictions = experiment.walk_forward(data)
     result = experiment.evaluate(predictions, args.cost_bps)
-    result["dataset"] = dataset_metadata
+    result["dataset"] = {**dataset_metadata, "target_horizon": args.horizon}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "forecast_results.json").write_text(
         json.dumps(result, indent=2), encoding="utf-8"

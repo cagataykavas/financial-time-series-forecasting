@@ -50,7 +50,35 @@ def test_cli_writes_governed_evidence_from_csv(tmp_path):
     assert manifest["payload"]["dataset"]["sha256"] == evidence["dataset"]["sha256"]
 
 
+def test_cli_propagates_multi_period_horizon(tmp_path):
+    output = tmp_path / "horizon"
+    assert (
+        main(
+            [
+                "--csv",
+                str(market_csv(tmp_path)),
+                "--horizon",
+                "3",
+                "--evidence",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    evidence = json.loads((output / "forecast_evidence.json").read_text())
+    assert evidence["dataset"]["target_horizon"] == 3
+    assert evidence["validation"]["gap"] == 3
+
+
 def test_cli_rejects_undersized_csv(tmp_path):
     with pytest.raises(SystemExit) as error:
         main(["--csv", str(market_csv(tmp_path, rows=100))])
+    assert error.value.code == 2
+
+
+def test_cli_scales_minimum_history_with_horizon():
+    with pytest.raises(SystemExit) as error:
+        main(["--rows", "320", "--horizon", "5", "--evidence"])
     assert error.value.code == 2

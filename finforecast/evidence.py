@@ -22,9 +22,17 @@ def _build_evidence(
     volume: pd.Series | None,
     dataset_metadata: dict[str, Any],
     seed: int,
+    horizon: int,
 ) -> dict[str, Any]:
-    supervised = make_supervised_features(close, volume)
-    splitter = WalkForwardSplitter(WalkForwardConfig(min_train_size=250, test_size=25, gap=1))
+    supervised = make_supervised_features(close, volume, horizon=horizon)
+    splitter = WalkForwardSplitter(
+        WalkForwardConfig(
+            min_train_size=250,
+            test_size=25,
+            gap=horizon,
+            label_horizon=horizon,
+        )
+    )
     runner = BacktestRunner(splitter, default_model_factories(seed))
     backtest = runner.run(supervised)
     cost = BusinessCost(
@@ -38,7 +46,12 @@ def _build_evidence(
     predictions = backtest.predictions
     calibration_end = max(2, int(len(predictions) * 0.4))
     calibration = predictions.iloc[:calibration_end]
-    evaluation = predictions.iloc[calibration_end:]
+    calibration_evaluation_gap = horizon - 1
+    evaluation = predictions.iloc[calibration_end + calibration_evaluation_gap :]
+    if evaluation.empty:
+        raise ValueError(
+            "not enough out-of-sample predictions after horizon-aware calibration purge"
+        )
     calibrator = SplitConformalCalibrator(coverage=0.9).fit(
         calibration["actual"], calibration["gradient_boosting"]
     )
@@ -56,18 +69,24 @@ def _build_evidence(
         min_fold_win_rate=0.5,
     )
     decision = policy.decide("gradient_boosting", "naive_zero", aggregate, backtest.folds)
-    dataset = {**dataset_metadata, "supervised_observations": len(supervised)}
+    dataset = {
+        **dataset_metadata,
+        "supervised_observations": len(supervised),
+        "target_horizon": horizon,
+    }
     scope_claim = (
         "Synthetic results are engineering evidence, not evidence of market profitability."
         if dataset["kind"] == "deterministic_synthetic_regime_shift"
         else "Historical evaluation is not evidence of future market profitability."
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": dataset,
         "validation": {
             "strategy": "expanding_walk_forward",
-            "gap": 1,
+            "label_horizon": horizon,
+            "gap": horizon,
+            "calibration_evaluation_gap": calibration_evaluation_gap,
             "fold_count": len(backtest.folds),
             "out_of_sample_observations": len(predictions),
             "folds": [fold["boundary"] for fold in backtest.folds],
@@ -79,14 +98,14 @@ def _build_evidence(
             "All reported forecasts are out of sample within the evaluation.",
             (
                 "The conformal interval is calibrated on an earlier prediction segment "
-                "and evaluated later."
+                "and evaluated after purging overlapping horizon labels."
             ),
             scope_claim,
         ],
     }
 
 
-def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
+def build_evidence(rows: int = 900, seed: int = 42, horizon: int = 1) -> dict[str, Any]:
     close, volume = synthetic_market(rows, seed)
     return _build_evidence(
         close,
@@ -97,24 +116,30 @@ def build_evidence(rows: int = 900, seed: int = 42) -> dict[str, Any]:
             "raw_observations": rows,
         },
         seed,
+        horizon,
     )
 
 
-def build_market_evidence(market: MarketData, seed: int = 42) -> dict[str, Any]:
-    return _build_evidence(market.close, market.volume, market.metadata(), seed)
+def build_market_evidence(
+    market: MarketData,
+    seed: int = 42,
+    horizon: int = 1,
+) -> dict[str, Any]:
+    return _build_evidence(market.close, market.volume, market.metadata(), seed, horizon)
 
 
 def write_evidence(
     output: str | Path,
     rows: int = 900,
     seed: int = 42,
+    horizon: int = 1,
     *,
     market_data: MarketData | None = None,
 ) -> dict[str, Any]:
     payload = (
-        build_market_evidence(market_data, seed)
+        build_market_evidence(market_data, seed, horizon)
         if market_data is not None
-        else build_evidence(rows, seed)
+        else build_evidence(rows, seed, horizon)
     )
     destination = Path(output)
     destination.mkdir(parents=True, exist_ok=True)

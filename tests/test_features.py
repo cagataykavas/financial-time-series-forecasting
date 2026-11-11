@@ -19,6 +19,18 @@ def test_features_keep_a_unique_increasing_time_index():
     assert result.index.is_unique
     assert result.index.is_monotonic_increasing
     assert np.isfinite(result.to_numpy()).all()
+    assert result.attrs["target_horizon"] == 1
+
+
+def test_multi_period_target_uses_declared_forward_horizon():
+    close = prices(90)
+    result = make_supervised_features(close, horizon=3)
+    timestamp = result.index[0]
+    location = close.index.get_loc(timestamp)
+    expected = close.iloc[location + 3] / close.iloc[location] - 1.0
+
+    assert result.loc[timestamp, "target_next_return"] == pytest.approx(expected)
+    assert result.attrs["target_horizon"] == 3
 
 
 def test_features_reject_malformed_market_series():
@@ -33,3 +45,9 @@ def test_features_reject_malformed_market_series():
 def test_features_require_enough_history_for_rolling_windows():
     with pytest.raises(ValueError, match="63"):
         make_supervised_features(prices(20))
+
+
+@pytest.mark.parametrize("horizon", [0, -1, True, 1.5])
+def test_features_reject_invalid_horizons(horizon):
+    with pytest.raises(ValueError, match="positive integer"):
+        make_supervised_features(prices(), horizon=horizon)

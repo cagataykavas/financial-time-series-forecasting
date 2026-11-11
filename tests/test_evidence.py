@@ -18,6 +18,17 @@ def test_evidence_is_deterministic_and_explicit_about_claim_scope():
     assert any("not evidence of market profitability" in claim for claim in first["claims"])
 
 
+def test_evidence_records_horizon_aware_purges():
+    payload = build_evidence(rows=520, seed=9, horizon=3)
+
+    assert payload["schema_version"] == 2
+    assert payload["dataset"]["target_horizon"] == 3
+    assert payload["validation"]["label_horizon"] == 3
+    assert payload["validation"]["gap"] == 3
+    assert payload["validation"]["calibration_evaluation_gap"] == 2
+    assert "purging overlapping horizon labels" in payload["claims"][1]
+
+
 def test_evidence_writes_hashed_candidate_manifest(tmp_path):
     payload = write_evidence(tmp_path, rows=520, seed=3)
     evidence = json.loads((tmp_path / "forecast_evidence.json").read_text())

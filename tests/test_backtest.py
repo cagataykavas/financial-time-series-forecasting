@@ -65,7 +65,7 @@ def test_custom_target_column_is_supported():
         {"zero": ZeroReturnRegressor},
         target_column="label",
     )
-    assert len(runner.run(frame).predictions) == 25
+    assert len(runner.run(frame).predictions) == 24
 
 
 def test_backtest_rejects_bad_data_before_model_fit():
@@ -80,3 +80,22 @@ def test_backtest_rejects_bad_data_before_model_fit():
             WalkForwardSplitter(WalkForwardConfig(min_train_size=15, test_size=5)),
             {"actual": ZeroReturnRegressor},
         )
+
+
+def test_backtest_rejects_feature_and_split_horizon_mismatch():
+    frame = dataset()
+    frame.attrs["target_horizon"] = 3
+    runner = BacktestRunner(
+        WalkForwardSplitter(
+            WalkForwardConfig(
+                min_train_size=15,
+                test_size=5,
+                gap=1,
+                label_horizon=1,
+            )
+        ),
+        {"zero": ZeroReturnRegressor},
+    )
+
+    with pytest.raises(ValueError, match="target_horizon"):
+        runner.run(frame)

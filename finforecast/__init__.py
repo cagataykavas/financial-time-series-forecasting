@@ -6,7 +6,7 @@ from .engine import ForecastExperiment
 from .intervals import SplitConformalCalibrator
 from .splits import WalkForwardConfig, WalkForwardSplitter
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 __all__ = [
     "__version__",

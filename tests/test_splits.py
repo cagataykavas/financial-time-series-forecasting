@@ -21,6 +21,14 @@ def test_expanding_split_respects_gap_and_boundaries():
     assert all(fold.train_end + 2 == fold.test_start for fold in folds)
 
 
+def test_split_rejects_gap_shorter_than_label_horizon():
+    with pytest.raises(ValueError, match="at least label_horizon"):
+        WalkForwardConfig(min_train_size=10, test_size=4, gap=2, label_horizon=3)
+
+    config = WalkForwardConfig(min_train_size=10, test_size=4, label_horizon=1)
+    assert config.gap == 1
+
+
 def test_rolling_split_caps_training_history():
     folds = WalkForwardSplitter(
         WalkForwardConfig(min_train_size=10, max_train_size=12, test_size=5)
@@ -46,3 +54,5 @@ def test_invalid_split_configuration_is_rejected():
         WalkForwardConfig(min_train_size=1)
     with pytest.raises(ValueError):
         WalkForwardConfig(max_train_size=20, min_train_size=30)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        WalkForwardConfig(gap=1.5)

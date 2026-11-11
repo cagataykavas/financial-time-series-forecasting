@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 
 
-def make_supervised_features(close: pd.Series, volume: pd.Series | None = None) -> pd.DataFrame:
+def make_supervised_features(
+    close: pd.Series,
+    volume: pd.Series | None = None,
+    *,
+    horizon: int = 1,
+) -> pd.DataFrame:
     """Create features using only information available before the prediction timestamp."""
     if not isinstance(close, pd.Series):
         raise TypeError("close must be a pandas Series")
@@ -12,6 +17,8 @@ def make_supervised_features(close: pd.Series, volume: pd.Series | None = None) 
         raise ValueError("close must contain observations")
     if not close.index.is_unique or not close.index.is_monotonic_increasing:
         raise ValueError("close must have a unique, increasing time index")
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+        raise ValueError("horizon must be a positive integer")
     close = close.astype(float)
     if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
         raise ValueError("close values must be finite and strictly positive")
@@ -40,10 +47,11 @@ def make_supervised_features(close: pd.Series, volume: pd.Series | None = None) 
         frame["volume_z_20"] = (
             volume.shift(1) - volume.shift(1).rolling(20).mean()
         ) / volume.shift(1).rolling(20).std()
-    frame["target_next_return"] = returns.shift(-1)
+    frame["target_next_return"] = close.shift(-horizon).div(close).sub(1.0)
     supervised = frame.replace([float("inf"), float("-inf")], pd.NA).dropna()
     if supervised.empty:
-        raise ValueError("at least 63 valid price observations are required")
+        raise ValueError(f"at least {62 + horizon} valid price observations are required")
+    supervised.attrs["target_horizon"] = horizon
     return supervised
 
 
